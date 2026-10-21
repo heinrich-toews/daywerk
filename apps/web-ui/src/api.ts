@@ -1,4 +1,4 @@
-export type Role = "allgemein" | "buero" | "admin";
+export type Role = "employee" | "office" | "admin";
 export type AccountKind = "work" | "break";
 
 export interface Account {

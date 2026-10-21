@@ -25,7 +25,7 @@ function tabs(): Tab[] {
     { id: "history", label: t("nav.history"), icon: () => <ListIcon /> },
     { id: "stats", label: t("nav.stats"), icon: () => <ChartIcon /> },
   ];
-  if (roleAtLeast("buero")) {
+  if (roleAtLeast("office")) {
     list.push({ id: "team", label: t("nav.team"), icon: () => <UsersIcon /> });
   }
   list.push({ id: "settings", label: t("nav.settings"), icon: () => <CogIcon /> });
@@ -56,9 +56,9 @@ function Shell() {
             </div>
             <div class="truncate text-xs text-muted">
               {user()?.name}
-              <Show when={user()?.role !== "allgemein"}>
+              <Show when={user()?.role !== "employee"}>
                 <span class="ml-1 rounded bg-soft px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">
-                  {t(`admin.role.${user()?.role}` as "admin.role.allgemein")}
+                  {t(`admin.role.${user()?.role}` as "admin.role.employee")}
                 </span>
               </Show>
             </div>

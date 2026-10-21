@@ -11,9 +11,9 @@ export const [booting, setBooting] = createSignal(true);
 export const [busy, setBusy] = createSignal(false);
 export const [notice, setNotice] = createSignal<string | null>(null);
 
-const RANK = { allgemein: 0, buero: 1, admin: 2 } as const;
+const RANK = { employee: 0, office: 1, admin: 2 } as const;
 
-export function roleAtLeast(role: "allgemein" | "buero" | "admin"): boolean {
+export function roleAtLeast(role: "employee" | "office" | "admin"): boolean {
   const current = me()?.user.role;
   if (!current) return false;
   return RANK[current] >= RANK[role];

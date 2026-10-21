@@ -170,8 +170,8 @@ fn require_role(user: &User, minimum: Role) -> Result<(), ApiError> {
 fn can_view_user(actor: &User, target: &User) -> bool {
     match actor.role {
         Role::Admin => true,
-        Role::Buero => actor.org_id == target.org_id,
-        Role::Allgemein => actor.id == target.id,
+        Role::Office => actor.org_id == target.org_id,
+        Role::Employee => actor.id == target.id,
     }
 }
 
@@ -584,7 +584,7 @@ async fn team(
     Query(q): Query<TeamQuery>,
 ) -> Result<Json<Vec<TeamRow>>, ApiError> {
     let actor = require_auth(&state, &headers)?;
-    require_role(&actor, Role::Buero)?;
+    require_role(&actor, Role::Office)?;
 
     let org_scope = match actor.role {
         Role::Admin => q.org_id.as_deref(),
@@ -601,7 +601,7 @@ async fn list_users(
     Query(q): Query<TeamQuery>,
 ) -> Result<Json<Vec<User>>, ApiError> {
     let actor = require_auth(&state, &headers)?;
-    require_role(&actor, Role::Buero)?;
+    require_role(&actor, Role::Office)?;
 
     match actor.role {
         Role::Admin => match q.org_id.as_deref() {
@@ -706,7 +706,7 @@ async fn list_accounts(
     headers: HeaderMap,
 ) -> Result<Json<Vec<Account>>, ApiError> {
     let user = require_auth(&state, &headers)?;
-    let include_archived = user.role >= Role::Buero;
+    let include_archived = user.role >= Role::Office;
     Ok(Json(state.store.accounts(&user.org_id, include_archived)?))
 }
 
@@ -826,7 +826,7 @@ async fn add_adjustment(
     Json(req): Json<AdjustmentRequest>,
 ) -> Result<StatusCode, ApiError> {
     let actor = require_auth(&state, &headers)?;
-    require_role(&actor, Role::Buero)?;
+    require_role(&actor, Role::Office)?;
 
     let target = state.store.user(&req.user_id)?.ok_or(ApiError::NotFound)?;
     if !can_view_user(&actor, &target) {

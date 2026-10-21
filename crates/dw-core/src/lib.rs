@@ -28,15 +28,15 @@ pub enum AccountKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    Allgemein,
-    Buero,
+    Employee,
+    Office,
     Admin,
 }
 
 impl Role {
     /// Everyone who may look at more than their own data.
     pub fn sees_all(&self) -> bool {
-        matches!(self, Role::Buero | Role::Admin)
+        matches!(self, Role::Office | Role::Admin)
     }
 
     pub fn is_admin(&self) -> bool {
@@ -409,9 +409,10 @@ mod tests {
 
     fn accounts() -> Vec<Account> {
         vec![
-            acct("allgemein", "ALLGEMEIN", AccountKind::Work),
+            // The seeded default account names come from the requirements.
+            acct("general", "ALLGEMEIN", AccountKind::Work),
             acct("pause", "PAUSE", AccountKind::Break),
-            acct("kunde", "Kunde TWx", AccountKind::Work),
+            acct("customer", "Customer TWx", AccountKind::Work),
         ]
     }
 
@@ -455,7 +456,7 @@ mod tests {
     #[test]
     fn first_press_opens_day_and_segment() {
         let s = snap(vec![], None);
-        let p = plan(&s, &start("allgemein"), NOW, DATE).unwrap();
+        let p = plan(&s, &start("general"), NOW, DATE).unwrap();
         assert_eq!(
             p.mutations,
             vec![
@@ -464,7 +465,7 @@ mod tests {
                     at: NOW
                 },
                 Mutation::OpenSegment {
-                    account_id: "allgemein".into(),
+                    account_id: "general".into(),
                     at: NOW
                 },
             ]
@@ -472,7 +473,7 @@ mod tests {
         assert_eq!(
             p.outcome,
             Outcome::Started {
-                account_id: "allgemein".into()
+                account_id: "general".into()
             }
         );
     }
@@ -480,21 +481,18 @@ mod tests {
     #[test]
     fn project_can_be_the_first_account() {
         let s = snap(vec![], None);
-        let p = plan(&s, &start("kunde"), NOW, DATE).unwrap();
+        let p = plan(&s, &start("customer"), NOW, DATE).unwrap();
         assert!(matches!(p.outcome, Outcome::Started { .. }));
         assert!(p.mutations.contains(&Mutation::OpenSegment {
-            account_id: "kunde".into(),
+            account_id: "customer".into(),
             at: NOW
         }));
     }
 
     #[test]
     fn switching_closes_previous_at_same_instant() {
-        let s = snap(
-            vec![seg("s1", "allgemein", 100, None)],
-            Some(DayStatus::Open),
-        );
-        let p = plan(&s, &start("kunde"), NOW, DATE).unwrap();
+        let s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
+        let p = plan(&s, &start("customer"), NOW, DATE).unwrap();
         assert_eq!(
             p.mutations,
             vec![
@@ -503,7 +501,7 @@ mod tests {
                     at: NOW
                 },
                 Mutation::OpenSegment {
-                    account_id: "kunde".into(),
+                    account_id: "customer".into(),
                     at: NOW
                 },
             ]
@@ -511,29 +509,23 @@ mod tests {
         assert_eq!(
             p.outcome,
             Outcome::Switched {
-                from: Some("allgemein".into()),
-                to: "kunde".into()
+                from: Some("general".into()),
+                to: "customer".into()
             }
         );
     }
 
     #[test]
     fn starting_the_running_account_is_a_noop() {
-        let s = snap(
-            vec![seg("s1", "allgemein", 100, None)],
-            Some(DayStatus::Open),
-        );
-        let p = plan(&s, &start("allgemein"), NOW, DATE).unwrap();
+        let s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
+        let p = plan(&s, &start("general"), NOW, DATE).unwrap();
         assert!(p.mutations.is_empty());
         assert_eq!(p.outcome, Outcome::Noop);
     }
 
     #[test]
     fn pause_closes_work_and_opens_break() {
-        let s = snap(
-            vec![seg("s1", "allgemein", 100, None)],
-            Some(DayStatus::Open),
-        );
+        let s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
         let p = plan(&s, &Action::Pause, NOW, DATE).unwrap();
         assert_eq!(
             p.mutations,
@@ -551,7 +543,7 @@ mod tests {
         assert_eq!(
             p.outcome,
             Outcome::Paused {
-                from: "allgemein".into()
+                from: "general".into()
             }
         );
     }
@@ -576,7 +568,7 @@ mod tests {
     #[test]
     fn resume_from_pause_closes_break() {
         let s = snap(vec![seg("s2", "pause", 200, None)], Some(DayStatus::Open));
-        let p = plan(&s, &start("allgemein"), NOW, DATE).unwrap();
+        let p = plan(&s, &start("general"), NOW, DATE).unwrap();
         assert_eq!(
             p.mutations,
             vec![
@@ -585,7 +577,7 @@ mod tests {
                     at: NOW
                 },
                 Mutation::OpenSegment {
-                    account_id: "allgemein".into(),
+                    account_id: "general".into(),
                     at: NOW
                 },
             ]
@@ -594,10 +586,7 @@ mod tests {
 
     #[test]
     fn stop_while_working_closes_segment_and_day() {
-        let s = snap(
-            vec![seg("s1", "allgemein", 100, None)],
-            Some(DayStatus::Open),
-        );
+        let s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
         let p = plan(&s, &Action::Stop, NOW, DATE).unwrap();
         assert_eq!(
             p.mutations,
@@ -612,7 +601,7 @@ mod tests {
         assert_eq!(
             p.outcome,
             Outcome::Stopped {
-                last: Some("allgemein".into())
+                last: Some("general".into())
             }
         );
     }
@@ -622,7 +611,7 @@ mod tests {
         // Work ran 100..200, pause started at 200 and is still open.
         let s = snap(
             vec![
-                seg("s1", "allgemein", 100, Some(200)),
+                seg("s1", "general", 100, Some(200)),
                 seg("s2", "pause", 200, None),
             ],
             Some(DayStatus::Open),
@@ -644,7 +633,7 @@ mod tests {
             p.outcome,
             Outcome::StoppedFromBreak {
                 deleted_break: "pause".into(),
-                closed_work: Some("allgemein".into())
+                closed_work: Some("general".into())
             }
         );
     }
@@ -655,7 +644,7 @@ mod tests {
         // pause began at 200. Stop must pull the end back to the pause start.
         let s = snap(
             vec![
-                seg("s1", "allgemein", 100, Some(250)),
+                seg("s1", "general", 100, Some(250)),
                 seg("s2", "pause", 200, None),
             ],
             Some(DayStatus::Open),
@@ -700,13 +689,13 @@ mod tests {
     #[test]
     fn start_on_closed_day_reopens_it() {
         let s = snap(
-            vec![seg("s1", "allgemein", 100, Some(200))],
+            vec![seg("s1", "general", 100, Some(200))],
             Some(DayStatus::Closed),
         );
-        let p = plan(&s, &start("allgemein"), NOW, DATE).unwrap();
+        let p = plan(&s, &start("general"), NOW, DATE).unwrap();
         assert!(p.mutations.contains(&Mutation::ReopenDay { at: NOW }));
         assert!(p.mutations.contains(&Mutation::OpenSegment {
-            account_id: "allgemein".into(),
+            account_id: "general".into(),
             at: NOW
         }));
     }
@@ -725,17 +714,14 @@ mod tests {
         let mut s = snap(vec![], None);
         s.accounts[2].archived = true;
         assert!(matches!(
-            plan(&s, &start("kunde"), NOW, DATE),
+            plan(&s, &start("customer"), NOW, DATE),
             Err(CoreError::AccountArchived(_))
         ));
     }
 
     #[test]
     fn missing_break_account_is_reported() {
-        let mut s = snap(
-            vec![seg("s1", "allgemein", 100, None)],
-            Some(DayStatus::Open),
-        );
+        let mut s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
         s.accounts.retain(|a| a.kind != AccountKind::Break);
         assert_eq!(
             plan(&s, &Action::Pause, NOW, DATE),
@@ -745,20 +731,20 @@ mod tests {
 
     #[test]
     fn full_requirement_flow() {
-        // A) ALLGEMEIN → Kunde TWx → PAUSE → ALLGEMEIN, then STOP.
+        // Requirement example: general → customer → break → general, then stop.
         let mut s = snap(vec![], None);
 
-        let p1 = plan(&s, &start("allgemein"), 0, DATE).unwrap();
+        let p1 = plan(&s, &start("general"), 0, DATE).unwrap();
         s.day = Some(day(DayStatus::Open));
-        s.segments.push(seg("s1", "allgemein", 0, None));
+        s.segments.push(seg("s1", "general", 0, None));
 
-        let p2 = plan(&s, &start("kunde"), 100, DATE).unwrap();
+        let p2 = plan(&s, &start("customer"), 100, DATE).unwrap();
         assert!(p2.mutations.contains(&Mutation::CloseSegment {
             segment_id: "s1".into(),
             at: 100
         }));
         s.segments[0].ended_at = Some(100);
-        s.segments.push(seg("s2", "kunde", 100, None));
+        s.segments.push(seg("s2", "customer", 100, None));
 
         let p3 = plan(&s, &Action::Pause, 250, DATE).unwrap();
         assert!(p3.mutations.contains(&Mutation::CloseSegment {
@@ -768,13 +754,13 @@ mod tests {
         s.segments[1].ended_at = Some(250);
         s.segments.push(seg("s3", "pause", 250, None));
 
-        let p4 = plan(&s, &start("allgemein"), 400, DATE).unwrap();
+        let p4 = plan(&s, &start("general"), 400, DATE).unwrap();
         assert!(p4.mutations.contains(&Mutation::CloseSegment {
             segment_id: "s3".into(),
             at: 400
         }));
         s.segments[2].ended_at = Some(400);
-        s.segments.push(seg("s4", "allgemein", 400, None));
+        s.segments.push(seg("s4", "general", 400, None));
 
         let p5 = plan(&s, &Action::Stop, 500, DATE).unwrap();
         assert_eq!(
@@ -797,7 +783,7 @@ mod tests {
         assert_eq!(
             p1.outcome,
             Outcome::Started {
-                account_id: "allgemein".into()
+                account_id: "general".into()
             }
         );
     }
@@ -805,7 +791,7 @@ mod tests {
     #[test]
     fn totals_count_open_segment_up_to_now() {
         let s = snap(
-            vec![seg("s1", "allgemein", 1_000, None)],
+            vec![seg("s1", "general", 1_000, None)],
             Some(DayStatus::Open),
         );
         let t = totals(&s.segments, &s.accounts, 61_000);
@@ -832,10 +818,10 @@ mod tests {
 
     #[test]
     fn role_ordering() {
-        assert!(Role::Admin > Role::Buero);
-        assert!(Role::Buero > Role::Allgemein);
+        assert!(Role::Admin > Role::Office);
+        assert!(Role::Office > Role::Employee);
         assert!(Role::Admin.is_admin());
-        assert!(Role::Buero.sees_all());
-        assert!(!Role::Allgemein.sees_all());
+        assert!(Role::Office.sees_all());
+        assert!(!Role::Employee.sees_all());
     }
 }

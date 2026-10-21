@@ -518,6 +518,10 @@ impl Store {
 
     /// Create `ALLGEMEIN` (primary work account) and `PAUSE` (the break account)
     /// if the organisation has none yet.
+    ///
+    /// These two names are the product defaults required by the specification.
+    /// They are *data*, not identifiers: organisations can rename or translate
+    /// them at any time without touching the code.
     pub fn ensure_default_accounts(&self, org_id: &str) -> Result<()> {
         let existing = self.accounts(org_id, true)?;
         if !existing.iter().any(|a| a.kind == AccountKind::Work) {
@@ -1332,8 +1336,8 @@ fn map_segment(row: &Row<'_>) -> rusqlite::Result<Segment> {
 
 fn role_str(role: Role) -> &'static str {
     match role {
-        Role::Allgemein => "allgemein",
-        Role::Buero => "buero",
+        Role::Employee => "employee",
+        Role::Office => "office",
         Role::Admin => "admin",
     }
 }
@@ -1341,8 +1345,8 @@ fn role_str(role: Role) -> &'static str {
 fn role_from(s: &str) -> Role {
     match s {
         "admin" => Role::Admin,
-        "buero" => Role::Buero,
-        _ => Role::Allgemein,
+        "office" => Role::Office,
+        _ => Role::Employee,
     }
 }
 
@@ -1439,7 +1443,7 @@ CREATE TABLE users (
     email                TEXT NOT NULL COLLATE NOCASE UNIQUE,
     name                 TEXT NOT NULL,
     password_hash        TEXT NOT NULL,
-    role                 TEXT NOT NULL CHECK (role IN ('allgemein','buero','admin')),
+    role                 TEXT NOT NULL CHECK (role IN ('employee','office','admin')),
     locale               TEXT NOT NULL DEFAULT 'de' CHECK (locale IN ('de','en')),
     daily_target_minutes INTEGER,
     active               INTEGER NOT NULL DEFAULT 1,
@@ -1542,7 +1546,7 @@ mod tests {
                 email: "a@example.org".into(),
                 name: "Anna".into(),
                 password_hash: "x".into(),
-                role: Role::Allgemein,
+                role: Role::Employee,
                 locale: "de".into(),
                 daily_target_minutes: None,
             })
@@ -1794,7 +1798,7 @@ mod tests {
                 email: "b@example.org".into(),
                 name: "Berta".into(),
                 password_hash: "x".into(),
-                role: Role::Allgemein,
+                role: Role::Employee,
                 locale: "en".into(),
                 daily_target_minutes: None,
             })
@@ -1871,7 +1875,7 @@ mod tests {
             email: "A@Example.org".into(),
             name: "dup".into(),
             password_hash: "x".into(),
-            role: Role::Allgemein,
+            role: Role::Employee,
             locale: "de".into(),
             daily_target_minutes: None,
         });

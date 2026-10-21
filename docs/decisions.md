@@ -6,7 +6,7 @@ agreed before implementation.
 | # | Decision | Result |
 |---|---|---|
 | D1 | Stack | Rust workspace + SolidJS + Tailwind v4, modelled on OpenChordBook; Tauri v2 for native clients |
-| D2 | Role scope | `admin` global, `büro` limited to its own organisation, `allgemein` limited to its own data |
+| D2 | Role scope | `admin` global, `office` limited to its own organisation, `employee` limited to its own data |
 | D3 | "Zeitkonto" | **A real hours balance from the start** — daily target per organisation, optional per-user override, manual adjustments, balance per period and total |
 | D4 | Stop while paused | Delete the current break segment; the last work segment ends when the break began |
 | D5 | Midnight | A shift may cross midnight; the day belongs to its start date |
@@ -40,3 +40,14 @@ the authenticated user rather than from the request.
 **Pause is data, not a flag.** `PAUSE` is an ordinary account row with `kind = 'break'`.
 The state machine special-cases it only where the requirements demand it (stop while
 paused). A unique index guarantees exactly one break account per organisation.
+
+## Naming
+
+All identifiers are English: Rust types and variants (`Role::Employee`,
+`Role::Office`), database values (`employee`, `office`, `admin`), API payloads
+and TypeScript types. German and English only appear as *translations* in
+`apps/web-ui/src/i18n.ts`, and as data the user can edit — notably the seeded
+account names `ALLGEMEIN` and `PAUSE`, which the specification requires.
+
+**Pre-1.0:** the schema is not stable yet. After a schema change, delete
+`data/daywerk.db` and let the server recreate it.

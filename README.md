@@ -8,7 +8,7 @@ office sees the hours and the running balance. No spreadsheets, no paper sheets.
 ```
 ALLGEMEIN  │  PAUSE  │  STOP
 ───────────┼─────────┼───────
-Kunde TWx  │  Lager  │  …
+Customer TWx │  Storage  │  …
 ```
 
 ## Why another time tracker?
@@ -25,7 +25,7 @@ auditable and impossible to double-book.
 - **Stop while paused** deletes the break and ends the work segment when the break began
 - **Real hours balance** per worker: `worked − (target × days) + adjustments`
   with an optional per-user target override
-- **Three roles** — `allgemein` (own data), `büro` (own organisation), `admin` (all organisations)
+- **Three roles** — `employee` (own data), `office` (own organisation), `admin` (all organisations)
 - **Multi-tenant** — any number of organisations, each with its own accounts and branding
 - **German and English UI**, selectable per user
 - **JSON backup / restore** as a single file
@@ -95,8 +95,8 @@ python3 scripts/api-smoke.py   # against a running server
 
 | Role | Sees | Can do |
 |---|---|---|
-| `allgemein` | own days, own balance | punch, read own statistics, change own profile |
-| `büro` | **own organisation** | everything above, plus all workers' days and **balances**, corrections, adjustments |
+| `employee` | own days, own balance | punch, read own statistics, change own profile |
+| `office` | **own organisation** | everything above, plus all workers' days and **balances**, corrections, adjustments |
 | `admin` | **all organisations** | everything above, plus users, accounts, branding, backup/import |
 
 ## Hours balance

@@ -58,17 +58,17 @@ def main() -> int:
     org_a = admin["org"]["id"]
 
     status, org_b = call(
-        "/api/orgs", admin_token, "POST", {"name": "Zweite Firma", "slug": "zweite"}
+        "/api/orgs", admin_token, "POST", {"name": "Second Company", "slug": "second"}
     )
     check(status == 200, f"admin creates a second organisation ({status})")
 
-    status, _ = call("/api/orgs", admin_token, "POST", {"name": "Doppelt", "slug": "zweite"})
+    status, _ = call("/api/orgs", admin_token, "POST", {"name": "Duplicate", "slug": "second"})
     check(status == 409, f"duplicate slug rejected ({status})")
 
     for email, name, role, org in [
-        ("buero@test.local", "Büro A", "buero", org_a),
-        ("worker@test.local", "Worker A", "allgemein", org_a),
-        ("other@test.local", "Worker B", "allgemein", org_b["id"]),
+        ("office@test.local", "Office A", "office", org_a),
+        ("worker@test.local", "Worker A", "employee", org_a),
+        ("other@test.local", "Worker B", "employee", org_b["id"]),
     ]:
         status, _ = call(
             "/api/users",
@@ -79,7 +79,7 @@ def main() -> int:
         check(status == 200, f"create {role} {email} ({status})")
 
     tokens = {}
-    for email in ["buero@test.local", "worker@test.local", "other@test.local"]:
+    for email in ["office@test.local", "worker@test.local", "other@test.local"]:
         status, res = call(
             "/api/auth/login", method="POST", body={"email": email, "password": "test1234"}
         )
@@ -89,14 +89,14 @@ def main() -> int:
     status, _ = call("/api/team", tokens["worker@test.local"])
     check(status == 403, f"employee cannot read the team view ({status})")
 
-    status, team = call("/api/team", tokens["buero@test.local"])
+    status, team = call("/api/team", tokens["office@test.local"])
     names = sorted(row["user"]["name"] for row in team)
     check(
-        status == 200 and names == ["Administrator", "Büro A", "Worker A"],
+        status == 200 and names == ["Administrator", "Office A", "Worker A"],
         f"office sees exactly its own organisation: {names} ({status})",
     )
 
-    status, team_b = call(f"/api/team?org_id={org_b['id']}", tokens["buero@test.local"])
+    status, team_b = call(f"/api/team?org_id={org_b['id']}", tokens["office@test.local"])
     check(all(row["org_id"] == org_a for row in team_b), "office cannot escape its organisation")
 
     status, team = call("/api/team", admin_token)
@@ -132,7 +132,7 @@ def main() -> int:
         f"stop closes the day ({status})",
     )
 
-    status, team = call("/api/team", tokens["buero@test.local"])
+    status, team = call("/api/team", tokens["office@test.local"])
     worker = next(row for row in team if row["user"]["email"] == "worker@test.local")
     check(
         worker["period"]["days"] == 1 and worker["period"]["balance_ms"] < 0,

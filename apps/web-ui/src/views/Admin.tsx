@@ -54,8 +54,8 @@ function UserRow(props: { user: User; orgs: Org[]; onSaved: (user: User) => void
         value={role()}
         onChange={(e) => setRole(e.currentTarget.value as Role)}
       >
-        <option value="allgemein">{t("admin.role.allgemein")}</option>
-        <option value="buero">{t("admin.role.buero")}</option>
+        <option value="employee">{t("admin.role.employee")}</option>
+        <option value="office">{t("admin.role.office")}</option>
         <option value="admin">{t("admin.role.admin")}</option>
       </select>
 
@@ -98,7 +98,7 @@ export default function Admin() {
   const [newEmail, setNewEmail] = createSignal("");
   const [newName, setNewName] = createSignal("");
   const [newPassword, setNewPassword] = createSignal("");
-  const [newRole, setNewRole] = createSignal<Role>("allgemein");
+  const [newRole, setNewRole] = createSignal<Role>("employee");
   const [newOrgId, setNewOrgId] = createSignal("");
   const [userError, setUserError] = createSignal<string | null>(null);
   const [importNotice, setImportNotice] = createSignal<string | null>(null);
@@ -322,7 +322,7 @@ export default function Admin() {
       </form>
 
       <form onSubmit={addOrg} class="card space-y-3 p-4">
-        <h2 class="font-display text-lg font-bold uppercase">{t("team.org")} +</h2>
+        <h2 class="font-display text-lg font-bold uppercase">{t("admin.newOrg")}</h2>
         <div class="grid grid-cols-2 gap-2">
           <input
             class="field"
@@ -354,7 +354,7 @@ export default function Admin() {
                   <div class="truncate text-sm font-semibold">{account.name}</div>
                   <div class="text-xs text-muted">
                     {account.kind === "break" ? t("day.break") : t("day.work")}
-                    {account.is_primary ? " · primary" : ""}
+                    {account.is_primary ? ` · ${t("admin.primary")}` : ""}
                     {account.archived ? " · ✕" : ""}
                   </div>
                 </div>
@@ -380,7 +380,7 @@ export default function Admin() {
             <input
               id="acc-name"
               class="field"
-              placeholder="Kunde …"
+              placeholder={t("admin.accountPlaceholder")}
               value={accountName()}
               onInput={(e) => setAccountName(e.currentTarget.value)}
             />
@@ -449,8 +449,8 @@ export default function Admin() {
               value={newRole()}
               onChange={(e) => setNewRole(e.currentTarget.value as Role)}
             >
-              <option value="allgemein">{t("admin.role.allgemein")}</option>
-              <option value="buero">{t("admin.role.buero")}</option>
+              <option value="employee">{t("admin.role.employee")}</option>
+              <option value="office">{t("admin.role.office")}</option>
               <option value="admin">{t("admin.role.admin")}</option>
             </select>
             <Show when={orgs().length > 1}>
