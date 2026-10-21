@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/dw-core",
+    "crates/dw-storage",
+    "crates/dw-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+repository = "https://github.com/heinrich-toews/daywerk"
+authors = ["The Daywerk contributors"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+dw-core = { path = "crates/dw-core" }
+dw-storage = { path = "crates/dw-storage" }

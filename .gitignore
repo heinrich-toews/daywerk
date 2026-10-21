@@ -1,0 +1,25 @@
+# build output
+/target
+/apps/web-ui/dist
+/apps/web-ui/node_modules
+node_modules
+
+# runtime data
+/data
+*.db
+*.db-shm
+*.db-wal
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# logs
+*.log
