@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createSignal, onMount } from "solid-js";
-import { api, type Org, type TeamRow } from "../api";
+import { api, downloadTimesheet, type Org, type TeamRow } from "../api";
 import { balanceClass, dur, monthStartIso, todayIso } from "../format";
 import { t } from "../i18n";
 import { roleAtLeast } from "../state";
@@ -12,6 +12,8 @@ export default function Team() {
   const [rows, setRows] = createSignal<TeamRow[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
+  const [exporting, setExporting] = createSignal<"xlsx" | "pdf" | null>(null);
+  const [exportError, setExportError] = createSignal<string | null>(null);
 
   onMount(() => {
     if (roleAtLeast("admin")) {
@@ -33,6 +35,22 @@ export default function Team() {
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   });
+
+  async function download(kind: "xlsx" | "pdf") {
+    setExporting(kind);
+    setExportError(null);
+    try {
+      await downloadTimesheet(kind, {
+        from: from(),
+        to: to(),
+        org_id: orgId() || undefined,
+      });
+    } catch (e) {
+      setExportError(`${t("export.failed")} ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExporting(null);
+    }
+  }
 
   return (
     <div class="space-y-4">
@@ -80,6 +98,29 @@ export default function Team() {
           </div>
         </Show>
       </div>
+
+      <div class="flex gap-2">
+        <button
+          type="button"
+          class="btn-ghost flex-1"
+          disabled={!!exporting()}
+          onClick={() => void download("xlsx")}
+        >
+          {exporting() === "xlsx" ? t("common.loading") : `${t("export.title")} XLSX`}
+        </button>
+        <button
+          type="button"
+          class="btn-ghost flex-1"
+          disabled={!!exporting()}
+          onClick={() => void download("pdf")}
+        >
+          {exporting() === "pdf" ? t("common.loading") : `${t("export.title")} PDF`}
+        </button>
+      </div>
+
+      <Show when={exportError()}>
+        {(message) => <p class="text-sm font-medium text-danger">{message()}</p>}
+      </Show>
 
       <Show when={error()}>
         {(message) => (

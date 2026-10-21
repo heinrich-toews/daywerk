@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::Extension;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::http::{HeaderMap, StatusCode, Uri, header::AUTHORIZATION};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post, put};
@@ -261,6 +261,12 @@ struct UpdateSegmentRequest {
 }
 
 #[derive(Deserialize, Default)]
+struct AccountParams {
+    #[serde(default)]
+    org_id: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
 struct BookingParams {
     #[serde(default)]
     q: Option<String>,
@@ -344,6 +350,8 @@ struct ProfileRequest {
 struct NewAccountRequest {
     name: String,
     kind: AccountKind,
+    #[serde(default)]
+    org_id: Option<String>,
     #[serde(default)]
     icon: Option<String>,
     #[serde(default)]
@@ -757,10 +765,15 @@ async fn update_profile(
 async fn list_accounts(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(params): Query<AccountParams>,
 ) -> Result<Json<Vec<Account>>, ApiError> {
     let user = require_auth(&state, &headers)?;
     let include_archived = user.role >= Role::Office;
-    Ok(Json(state.store.accounts(&user.org_id, include_archived)?))
+    let org_id = match user.role {
+        Role::Admin => params.org_id.unwrap_or_else(|| user.org_id.clone()),
+        _ => user.org_id.clone(),
+    };
+    Ok(Json(state.store.accounts(&org_id, include_archived)?))
 }
 
 async fn create_account(
@@ -788,8 +801,14 @@ async fn create_account(
         ));
     }
 
+    let org_id = if actor.role.is_admin() {
+        req.org_id.unwrap_or_else(|| actor.org_id.clone())
+    } else {
+        actor.org_id.clone()
+    };
+
     let account = state.store.create_account(
-        &actor.org_id,
+        &org_id,
         name,
         kind,
         req.icon.as_deref(),
@@ -797,7 +816,7 @@ async fn create_account(
         is_primary,
     )?;
     let _ = state.store.audit(
-        &actor.org_id,
+        &org_id,
         &actor.id,
         "account_created",
         "account",
@@ -818,9 +837,6 @@ async fn update_account(
     require_role(&actor, Role::Admin)?;
 
     let current = state.store.account(&id)?.ok_or(ApiError::NotFound)?;
-    if current.org_id != actor.org_id {
-        return Err(ApiError::Forbidden);
-    }
     Ok(Json(state.store.update_account(
         &id,
         &req.name.unwrap_or(current.name),
@@ -999,6 +1015,197 @@ async fn bookings(
     })?))
 }
 
+async fn delete_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Admin)?;
+    let account = state.store.account(&id)?.ok_or(ApiError::NotFound)?;
+    state.store.delete_account(&id)?;
+    let _ = state.store.audit(
+        &account.org_id,
+        &actor.id,
+        "account_deleted",
+        "account",
+        &id,
+        "{}",
+        now_ms(),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn fmt_hm(ms: Millis, tz_name: &str) -> String {
+    let tz: Tz = tz_name.parse().unwrap_or(chrono_tz::Europe::Berlin);
+    match Utc.timestamp_millis_opt(ms).single() {
+        Some(dt) => dt.with_timezone(&tz).format("%H:%M").to_string(),
+        None => String::new(),
+    }
+}
+
+fn fmt_stamp(ms: Millis, tz_name: &str) -> String {
+    let tz: Tz = tz_name.parse().unwrap_or(chrono_tz::Europe::Berlin);
+    match Utc.timestamp_millis_opt(ms).single() {
+        Some(dt) => dt.with_timezone(&tz).format("%d.%m.%Y %H:%M").to_string(),
+        None => String::new(),
+    }
+}
+
+/// `2026-10-21` -> `21.10.2026`
+fn de_date(iso: &str) -> String {
+    let parts: Vec<&str> = iso.split('-').collect();
+    if parts.len() == 3 {
+        format!("{}.{}.{}", parts[2], parts[1], parts[0])
+    } else {
+        iso.to_string()
+    }
+}
+
+fn build_report(
+    state: &AppState,
+    actor: &User,
+    org_id: Option<&str>,
+    from: &str,
+    to: &str,
+) -> Result<dw_export::Report, ApiError> {
+    let now = now_ms();
+    let org_scope = match actor.role {
+        Role::Admin => org_id,
+        _ => Some(actor.org_id.as_str()),
+    };
+
+    let own_org = state.store.org(&actor.org_id)?.ok_or(ApiError::NotFound)?;
+    let (title, timezone) = match org_scope {
+        Some(id) => match state.store.org(id)? {
+            Some(org) => (org.name, org.timezone),
+            None => (own_org.name, own_org.timezone),
+        },
+        None => ("Alle Organisationen".to_string(), own_org.timezone),
+    };
+
+    let rows = state.store.team(org_scope, from, to, now)?;
+    let mut workers = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let org = state
+            .store
+            .org(&row.user.org_id)?
+            .ok_or(ApiError::NotFound)?;
+        let accounts = state.store.accounts(&row.user.org_id, true)?;
+        let days = state
+            .store
+            .days_between(&row.user.id, &row.user.org_id, from, to, now)?;
+
+        let mut day_reports = Vec::with_capacity(days.len());
+        for day in days {
+            let mut segments = Vec::with_capacity(day.segments.len());
+            for segment in &day.segments {
+                let account = accounts.iter().find(|a| a.id == segment.account_id);
+                segments.push(dw_export::SegmentReport {
+                    account: account.map(|a| a.name.clone()).unwrap_or_default(),
+                    start: fmt_hm(segment.started_at, &org.timezone),
+                    end: segment
+                        .ended_at
+                        .map(|end| fmt_hm(end, &org.timezone))
+                        .unwrap_or_default(),
+                    duration_ms: segment.ended_at.unwrap_or(now) - segment.started_at,
+                    note: segment.note.clone(),
+                    material: segment.material.clone(),
+                });
+            }
+            let first_start = segments
+                .first()
+                .map(|s| s.start.clone())
+                .unwrap_or_default();
+            let last_end = segments.last().map(|s| s.end.clone()).unwrap_or_default();
+
+            day_reports.push(dw_export::DayReport {
+                date: de_date(&day.day.date),
+                first_start,
+                last_end,
+                work_ms: day.totals.work_ms,
+                break_ms: day.totals.break_ms,
+                target_ms: row.period.target_minutes * 60_000,
+                balance_ms: day.totals.work_ms - row.period.target_minutes * 60_000,
+                segments,
+            });
+        }
+        day_reports.reverse(); // chronological in the report
+
+        workers.push(dw_export::WorkerReport {
+            name: row.user.name.clone(),
+            email: row.user.email.clone(),
+            org_name: row.org_name.clone(),
+            days_count: row.period.days,
+            work_ms: row.period.worked_ms,
+            break_ms: row.period.break_ms,
+            target_ms: row.period.target_ms,
+            balance_ms: row.period.balance_ms,
+            total_balance_ms: row.total.balance_ms,
+            days: day_reports,
+        });
+    }
+
+    Ok(dw_export::Report {
+        org_name: title,
+        from: de_date(from),
+        to: de_date(to),
+        generated_at: fmt_stamp(now, &timezone),
+        workers,
+    })
+}
+
+fn download_response(bytes: Vec<u8>, mime: &str, filename: &str) -> Result<Response, ApiError> {
+    Ok((
+        [
+            (CONTENT_TYPE, mime.to_string()),
+            (
+                CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+async fn export_xlsx(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TeamQuery>,
+) -> Result<Response, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Office)?;
+    let (from, to) = range_for(&state, &actor, q.from.as_deref(), q.to.as_deref());
+    let report = build_report(&state, &actor, q.org_id.as_deref(), &from, &to)?;
+    let bytes =
+        dw_export::render_xlsx(&report).map_err(|e| ApiError::Internal(format!("xlsx: {e}")))?;
+    download_response(
+        bytes,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        &format!("daywerk-{from}_{to}.xlsx"),
+    )
+}
+
+async fn export_pdf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TeamQuery>,
+) -> Result<Response, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Office)?;
+    let (from, to) = range_for(&state, &actor, q.from.as_deref(), q.to.as_deref());
+    let report = build_report(&state, &actor, q.org_id.as_deref(), &from, &to)?;
+    let bytes =
+        dw_export::render_pdf(&report).map_err(|e| ApiError::Internal(format!("pdf: {e}")))?;
+    download_response(
+        bytes,
+        "application/pdf",
+        &format!("daywerk-{from}_{to}.pdf"),
+    )
+}
+
 async fn add_adjustment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1169,12 +1376,17 @@ async fn main() {
         .route("/api/users/{id}", patch(update_user))
         .route("/api/profile", put(update_profile))
         .route("/api/accounts", get(list_accounts).post(create_account))
-        .route("/api/accounts/{id}", patch(update_account))
+        .route(
+            "/api/accounts/{id}",
+            patch(update_account).delete(delete_account),
+        )
         .route("/api/org", get(get_org).put(update_org))
         .route("/api/orgs", get(list_orgs).post(create_org))
         .route("/api/orgs/{id}", patch(update_org_by_id))
         .route("/api/adjustments", post(add_adjustment))
         .route("/api/export", get(export_backup))
+        .route("/api/export/timesheet.xlsx", get(export_xlsx))
+        .route("/api/export/timesheet.pdf", get(export_pdf))
         .route("/api/import", post(import_backup))
         .with_state(state);
 

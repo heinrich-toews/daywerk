@@ -51,3 +51,19 @@ account names `ALLGEMEIN` and `PAUSE`, which the specification requires.
 
 **Pre-1.0:** the schema is not stable yet. After a schema change, delete
 `data/daywerk.db` and let the server recreate it.
+
+## Notes on transitions
+
+Notes and materials belong to the segment that is **closed**, not to the one that
+starts. The punch request carries them and the server applies them in the same
+transaction that closes the segment, so a note can never end up on the wrong
+entry. Breaks are never annotated: stopping while paused deletes the break, and
+the work segment already carries the notes it got when the break began.
+
+## Deleting time accounts
+
+An account with booked segments is never deleted — that would rewrite history.
+The API refuses with `409` and the UI offers archiving instead. The primary
+account and the break account cannot be deleted either; they are structural.
+Archived accounts keep their names free for reuse, and restoring one that
+collides with a new active name is refused by a partial unique index.

@@ -549,19 +549,62 @@ impl Store {
         archived: bool,
         is_primary: bool,
     ) -> Result<Account> {
-        self.lock().execute(
-            "UPDATE accounts SET name = ?2, icon = ?3, sort_order = ?4,
-                    archived = ?5, is_primary = ?6 WHERE id = ?1",
-            params![
-                id,
-                name,
-                icon,
-                sort_order,
-                i64::from(archived),
-                i64::from(is_primary)
-            ],
-        )?;
+        self.lock()
+            .execute(
+                "UPDATE accounts SET name = ?2, icon = ?3, sort_order = ?4,
+                        archived = ?5, is_primary = ?6 WHERE id = ?1",
+                params![
+                    id,
+                    name.trim(),
+                    icon,
+                    sort_order,
+                    i64::from(archived),
+                    i64::from(is_primary)
+                ],
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::SqliteFailure(err, _)
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    StorageError::Conflict("an active account with this name already exists".into())
+                }
+                other => StorageError::Sql(other),
+            })?;
         self.account(id)?.ok_or(StorageError::NotFound)
+    }
+
+    /// Delete an account that has never been used.
+    ///
+    /// Accounts with booked time and the two structural accounts (primary and
+    /// break) are refused: history must not disappear because of a click.
+    pub fn delete_account(&self, id: &str) -> Result<()> {
+        let account = self.account(id)?.ok_or(StorageError::NotFound)?;
+        if account.is_primary {
+            return Err(StorageError::Conflict(
+                "the primary account cannot be deleted".into(),
+            ));
+        }
+        if account.kind == AccountKind::Break {
+            return Err(StorageError::Conflict(
+                "the break account cannot be deleted".into(),
+            ));
+        }
+        let used: i64 = {
+            let conn = self.lock();
+            conn.query_row(
+                "SELECT count(*) FROM segments WHERE account_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?
+        };
+        if used > 0 {
+            return Err(StorageError::Conflict(format!(
+                "account has {used} entries; archive it instead"
+            )));
+        }
+        self.lock()
+            .execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+        Ok(())
     }
 
     /// Create `ALLGEMEIN` (primary work account) and `PAUSE` (the break account)
@@ -1245,6 +1288,8 @@ impl Store {
                     "ended_at",
                     "client_uuid",
                     "source",
+                    "note",
+                    "material",
                     "edited_by",
                     "edited_at",
                 ],
@@ -1377,6 +1422,8 @@ impl Store {
                     "ended_at",
                     "client_uuid",
                     "source",
+                    "note",
+                    "material",
                     "edited_by",
                     "edited_at",
                 ],
@@ -1426,7 +1473,14 @@ impl Store {
             for row in &rows {
                 let values: Vec<Box<dyn rusqlite::ToSql>> = cols
                     .iter()
-                    .map(|c| json_to_sql(row.get(*c).unwrap_or(&serde_json::Value::Null)))
+                    .map(|c| match (c, row.get(*c)) {
+                        // backups created before schema v2 have no note/material
+                        (&"note" | &"material", None) => {
+                            Box::new(String::new()) as Box<dyn rusqlite::ToSql>
+                        }
+                        (_, Some(value)) => json_to_sql(value),
+                        (_, None) => json_to_sql(&serde_json::Value::Null),
+                    })
                     .collect();
                 let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|v| v.as_ref()).collect();
                 stmt.execute(refs.as_slice())?;
@@ -2063,12 +2117,31 @@ mod tests {
             )
             .unwrap();
         store
-            .punch(&user, &Action::Stop, NOW + 60_000, DATE, "test")
+            .punch_with(
+                &user,
+                &Action::Stop,
+                NOW + 60_000,
+                DATE,
+                "test",
+                &dw_core::Annotation {
+                    note: "Restored note".into(),
+                    material: "2x Kabel".into(),
+                },
+            )
             .unwrap();
+        let segment_id = store
+            .days_between(&user.id, &org.id, DATE, DATE, NOW)
+            .unwrap()[0]
+            .segments[0]
+            .id
+            .clone();
 
         let backup = store.export_json().unwrap();
         let counts = store.import_json(&backup).unwrap();
         assert_eq!(counts["segments"], 1);
+        let restored = store.segment(&segment_id).unwrap().unwrap();
+        assert_eq!(restored.note, "Restored note");
+        assert_eq!(restored.material, "2x Kabel");
 
         let days = store
             .days_between(&user.id, &org.id, DATE, DATE, NOW)
@@ -2163,6 +2236,104 @@ mod tests {
         assert_eq!(updated.material, "Kabel");
         assert_eq!(updated.started_at, before.started_at);
         assert_eq!(updated.ended_at, before.ended_at);
+    }
+
+    #[test]
+    fn unused_accounts_can_be_deleted() {
+        let (store, org, _) = store();
+        let account = store
+            .create_account(&org.id, "Tippfehler", AccountKind::Work, None, 100, false)
+            .unwrap();
+        store.delete_account(&account.id).unwrap();
+        assert!(store.account(&account.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn used_accounts_are_protected_from_deletion() {
+        let (store, org, user) = store();
+        let account = store
+            .create_account(&org.id, "Kunde", AccountKind::Work, None, 100, false)
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: account.id.clone(),
+                },
+                NOW,
+                DATE,
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(&user, &Action::Stop, NOW + 60_000, DATE, "test")
+            .unwrap();
+
+        let err = store.delete_account(&account.id);
+        assert!(matches!(err, Err(StorageError::Conflict(_))));
+        assert!(
+            store.account(&account.id).unwrap().is_some(),
+            "account kept"
+        );
+    }
+
+    #[test]
+    fn structural_accounts_cannot_be_deleted() {
+        let (store, org, _) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let primary = accounts.iter().find(|a| a.is_primary).unwrap();
+        let brk = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Break)
+            .unwrap();
+        assert!(matches!(
+            store.delete_account(&primary.id),
+            Err(StorageError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.delete_account(&brk.id),
+            Err(StorageError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn archived_accounts_disappear_and_can_be_restored() {
+        let (store, org, _) = store();
+        let account = store
+            .create_account(&org.id, "Lager", AccountKind::Work, None, 100, false)
+            .unwrap();
+        assert_eq!(store.accounts(&org.id, false).unwrap().len(), 3);
+
+        store
+            .update_account(&account.id, "Lager", None, 100, true, false)
+            .unwrap();
+        assert_eq!(store.accounts(&org.id, false).unwrap().len(), 2);
+
+        store
+            .update_account(&account.id, "Lager", None, 100, false, false)
+            .unwrap();
+        assert_eq!(store.accounts(&org.id, false).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn an_archived_name_can_be_reused() {
+        let (store, org, _) = store();
+        let account = store
+            .create_account(&org.id, "Lager", AccountKind::Work, None, 100, false)
+            .unwrap();
+        store
+            .update_account(&account.id, "Lager", None, 100, true, false)
+            .unwrap();
+
+        // while archived the name is free
+        let again = store
+            .create_account(&org.id, "Lager", AccountKind::Work, None, 100, false)
+            .unwrap();
+        assert_ne!(again.id, account.id);
+
+        // restoring the first one now collides with the new active name
+        let err = store.update_account(&account.id, "Lager", None, 100, false, false);
+        assert!(err.is_err(), "two active accounts may not share a name");
     }
 
     #[test]

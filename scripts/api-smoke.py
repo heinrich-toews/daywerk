@@ -43,6 +43,16 @@ def call(path, token=None, method="GET", body=None):
         return exc.code, payload
 
 
+def fetch_raw(path, token):
+    req = urllib.request.Request(f"{BASE}{quote(path, safe='/?&=')}")
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req) as res:
+            return res.status, res.headers.get("content-type", ""), res.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("content-type", ""), exc.read()
+
+
 def check(condition, label):
     results.append(f"{'PASS' if condition else 'FAIL'}  {label}")
 
@@ -223,6 +233,37 @@ def main() -> int:
     status, _ = call("/api/export", tokens["worker@test.local"])
     check(status == 403, f"employee cannot export ({status})")
 
+    # ---- account deletion ----------------------------------------------
+    status, temp = call(
+        "/api/accounts", worker_token, "POST", {"name": "Tippfehler", "kind": "work"}
+    )
+    check(status == 200, f"create a throwaway account ({status})")
+    status, _ = call(f"/api/accounts/{temp['id']}", worker_token, "DELETE")
+    check(status == 403, f"employee cannot delete accounts ({status})")
+    status, _ = call(f"/api/accounts/{temp['id']}", admin_token, "DELETE")
+    check(status == 204, f"admin deletes an unused account ({status})")
+    status, _ = call(f"/api/accounts/{own_account['id']}", admin_token, "DELETE")
+    check(status == 409, f"used account is protected ({status})")
+
+    # ---- timesheet exports ---------------------------------------------
+    status, ctype, body = fetch_raw("/api/export/timesheet.xlsx", worker_token)
+    check(status == 403, f"employee cannot export a timesheet ({status})")
+
+    status, ctype, body = fetch_raw("/api/export/timesheet.xlsx", tokens["office@test.local"])
+    check(
+        status == 200 and body[:2] == b"PK" and "spreadsheet" in ctype,
+        f"office downloads xlsx ({status}, {len(body)} bytes)",
+    )
+
+    status, ctype, body = fetch_raw("/api/export/timesheet.pdf", tokens["office@test.local"])
+    check(
+        status == 200 and body.startswith(b"%PDF-") and "pdf" in ctype,
+        f"office downloads pdf ({status}, {len(body)} bytes)",
+    )
+
+    status, ctype, body = fetch_raw("/api/export/timesheet.xlsx", admin_token)
+    check(status == 200 and body[:2] == b"PK", f"admin downloads xlsx ({status})")
+
     status, backup = call("/api/export", admin_token)
     check(
         status == 200 and backup["format"] == "daywerk-backup",
@@ -238,6 +279,19 @@ def main() -> int:
 
     status, counts = call("/api/import", admin_token, "POST", backup)
     check(status == 200 and counts["users"] == 4, f"import restores 4 users ({status})")
+
+    # sessions are wiped by an import, so log in again
+    status, again = call(
+        "/api/auth/login", method="POST",
+        body={"email": "worker@test.local", "password": "test1234"},
+    )
+    check(status == 200, f"login after import ({status})")
+    status, days = call("/api/days", again["token"])
+    notes = [seg["note"] for entry in days for seg in entry["segments"] if seg["note"]]
+    check(
+        "Regal aufgefüllt (korrigiert)" in notes,
+        "notes survive the JSON backup and restore",
+    )
 
     print("\n".join(results))
     return 0 if all(line.startswith("PASS") for line in results) else 1

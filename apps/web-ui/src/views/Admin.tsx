@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onMount } from "solid-js";
+import { For, Show, createEffect, createSignal, onMount } from "solid-js";
 import {
   api,
   downloadBackup,
@@ -90,6 +90,7 @@ export default function Admin() {
   const [newOrgSlug, setNewOrgSlug] = createSignal("");
 
   const [accounts, setAccounts] = createSignal<TimeAccount[]>([]);
+  const [accountError, setAccountError] = createSignal<string | null>(null);
   const [accountName, setAccountName] = createSignal("");
   const [accountKind, setAccountKind] = createSignal<AccountKind>("work");
 
@@ -105,11 +106,18 @@ export default function Admin() {
 
   async function loadAccounts() {
     try {
-      setAccounts(await api.accounts());
+      setAccounts(await api.accounts(editOrgId()));
     } catch {
       /* ignore */
     }
   }
+
+  // Accounts belong to the organisation selected above.
+  createEffect(() => {
+    const id = editOrgId();
+    void id;
+    void loadAccounts();
+  });
 
   async function loadUsers() {
     try {
@@ -175,20 +183,46 @@ export default function Admin() {
   async function addAccount(e: Event) {
     e.preventDefault();
     if (!accountName().trim()) return;
-    await api.createAccount({
-      name: accountName().trim(),
-      kind: accountKind(),
-      sort_order: accountKind() === "break" ? 10 : 100,
-    });
-    setAccountName("");
-    await loadAccounts();
-    await refresh();
+    setAccountError(null);
+    try {
+      await api.createAccount({
+        name: accountName().trim(),
+        kind: accountKind(),
+        sort_order: accountKind() === "break" ? 10 : 100,
+        org_id: editOrgId(),
+      });
+      setAccountName("");
+      await loadAccounts();
+      if (editOrgId() === org().id) await refresh();
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    }
   }
 
-  async function archive(account: TimeAccount) {
-    await api.updateAccount(account.id, { archived: true });
-    await loadAccounts();
-    await refresh();
+  async function setArchived(account: TimeAccount, archived: boolean) {
+    setAccountError(null);
+    try {
+      await api.updateAccount(account.id, { archived });
+      await loadAccounts();
+      if (editOrgId() === org().id) await refresh();
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function removeAccount(account: TimeAccount) {
+    if (!window.confirm(`${t("admin.delete")}: ${account.name}?`)) return;
+    setAccountError(null);
+    try {
+      await api.deleteAccount(account.id);
+      await loadAccounts();
+      if (editOrgId() === org().id) await refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setAccountError(
+        message.toLowerCase().includes("entries") ? t("admin.deleteUsed") : message,
+      );
+    }
   }
 
   async function addUser(e: Event) {
@@ -355,22 +389,44 @@ export default function Admin() {
                   <div class="text-xs text-muted">
                     {account.kind === "break" ? t("day.break") : t("day.work")}
                     {account.is_primary ? ` · ${t("admin.primary")}` : ""}
-                    {account.archived ? " · ✕" : ""}
+                    {account.archived ? ` · ${t("admin.archived")}` : ""}
                   </div>
                 </div>
-                <Show when={!account.is_primary && account.kind !== "break" && !account.archived}>
+                <Show when={!account.is_primary && account.kind !== "break"}>
+                  <Show when={account.archived}>
+                    <button
+                      type="button"
+                      class="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-primary"
+                      onClick={() => void setArchived(account, false)}
+                    >
+                      {t("admin.restore")}
+                    </button>
+                  </Show>
+                  <Show when={!account.archived}>
+                    <button
+                      type="button"
+                      class="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-primary"
+                      onClick={() => void setArchived(account, true)}
+                    >
+                      {t("admin.archive")}
+                    </button>
+                  </Show>
                   <button
                     type="button"
-                    class="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-danger"
-                    onClick={() => void archive(account)}
+                    class="rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/10"
+                    onClick={() => void removeAccount(account)}
                   >
-                    {t("admin.archive")}
+                    {t("admin.delete")}
                   </button>
                 </Show>
               </div>
             )}
           </For>
         </div>
+
+        <Show when={accountError()}>
+          {(message) => <p class="text-sm font-medium text-danger">{message()}</p>}
+        </Show>
 
         <form onSubmit={addAccount} class="flex flex-wrap items-end gap-2">
           <div class="min-w-40 flex-1">

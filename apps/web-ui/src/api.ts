@@ -298,7 +298,10 @@ export const api = {
   updateProfile: (body: { name?: string; locale?: string; password?: string }) =>
     request<User>("/api/profile", { method: "PUT", body: JSON.stringify(body) }),
 
-  accounts: () => request<Account[]>("/api/accounts"),
+  accounts: (orgId?: string) => request<Account[]>(`/api/accounts${qs({ org_id: orgId })}`),
+
+  deleteAccount: (id: string) =>
+    request<void>(`/api/accounts/${id}`, { method: "DELETE" }),
 
   createAccount: (body: {
     name: string;
@@ -306,6 +309,7 @@ export const api = {
     icon?: string;
     sort_order?: number;
     is_primary?: boolean;
+    org_id?: string;
   }) => request<Account>("/api/accounts", { method: "POST", body: JSON.stringify(body) }),
 
   updateAccount: (
@@ -362,6 +366,45 @@ export const api = {
       body: JSON.stringify(data),
     }),
 };
+
+/** Download a timesheet through fetch so the bearer token stays out of the URL. */
+export async function downloadTimesheet(
+  kind: "xlsx" | "pdf",
+  params: { from?: string; to?: string; org_id?: string; user_id?: string },
+): Promise<void> {
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/export/timesheet.${kind}${qs(params)}`, { headers });
+  } catch {
+    throw new ApiError("network", 0);
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    let message = res.statusText;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (parsed.error) message = String(parsed.error);
+    } catch {
+      /* keep status text */
+    }
+    throw new ApiError(message, res.status);
+  }
+
+  const blob = await res.blob();
+  const suffix = params.from && params.to ? `${params.from}_${params.to}` : "export";
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `daywerk-${suffix}.${kind}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
 /** Download the JSON backup through fetch so the bearer token is included. */
 export async function downloadBackup(): Promise<void> {

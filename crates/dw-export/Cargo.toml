@@ -1,0 +1,11 @@
+[package]
+name = "dw-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1"
+rust_xlsxwriter = "0.101"
+printpdf = "0.7"

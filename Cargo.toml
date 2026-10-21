@@ -4,6 +4,7 @@ members = [
     "crates/dw-core",
     "crates/dw-storage",
     "crates/dw-server",
+    "crates/dw-export",
 ]
 
 [workspace.package]
@@ -21,3 +22,4 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 dw-core = { path = "crates/dw-core" }
 dw-storage = { path = "crates/dw-storage" }
+dw-export = { path = "crates/dw-export" }

@@ -21,13 +21,18 @@ auditable and impossible to double-book.
 ## Features
 
 - **One exclusive timer** — starting another time account stops the previous one
-- **Default accounts** `ALLGEMEIN` (work) and `PAUSE` (break); admins add project accounts
+- **Default accounts** `ALLGEMEIN` (work) and `PAUSE` (break); anyone can add work accounts
+  right on the punch screen, admins add/archive/delete the rest
+- **Notes and materials** are captured whenever a work segment is closed — switching jobs,
+  pausing or stopping — and shown in the history
 - **Stop while paused** deletes the break and ends the work segment when the break began
 - **Real hours balance** per worker: `worked − (target × days) + adjustments`
   with an optional per-user target override
 - **Three roles** — `employee` (own data), `office` (own organisation), `admin` (all organisations)
 - **Multi-tenant** — any number of organisations, each with its own accounts and branding
 - **German and English UI**, selectable per user
+- **Search** across notes and materials, scoped to the office's organisation
+- **XLSX and PDF export** of the timesheet (summary, per day, raw segments with notes)
 - **JSON backup / restore** as a single file
 - **REST API** for the web UI and native clients (Tauri planned)
 - **Branding** — logo path, primary colour and accent colour per organisation
@@ -123,15 +128,20 @@ All endpoints return JSON and take `Authorization: Bearer <token>` except login.
 | `POST` | `/api/auth/logout` | any | invalidate it |
 | `GET` | `/api/me` | any | user, org, accounts, balances |
 | `GET` | `/api/today` | any | open day, segments, active account |
-| `POST` | `/api/punch` | any | `{"action":"start\|pause\|stop","account_id":"…"}` |
+| `POST` | `/api/punch` | any | `{"action":"start\|pause\|stop","account_id":"…","note":"…","material":"…"}` |
 | `GET` | `/api/days?from&to&user_id` | any / office | day history |
 | `GET` | `/api/stats?from&to&user_id` | any / office | aggregates + balance |
 | `GET` | `/api/team?from&to&org_id` | office / admin | balances of every worker |
 | `GET` `POST` | `/api/users` | office / admin | list / create employees |
 | `PATCH` | `/api/users/{id}` | admin | role, target, locale, password |
 | `PUT` | `/api/profile` | any | own name, locale, password |
-| `GET` `POST` | `/api/accounts` | any / admin | time accounts |
-| `PATCH` | `/api/accounts/{id}` | admin | rename, archive, reorder |
+| `GET` `POST` | `/api/accounts` | any | list; create a work account in your own org |
+| `PATCH` | `/api/accounts/{id}` | admin | rename, archive, restore, reorder |
+| `DELETE` | `/api/accounts/{id}` | admin | delete an **unused** account (409 when it has entries) |
+| `PATCH` | `/api/segments/{id}` | own today / office / admin | edit note and material |
+| `GET` | `/api/bookings?q=&from&to&user_id` | office / admin | search notes and materials |
+| `GET` | `/api/export/timesheet.xlsx` | office / admin | Excel report |
+| `GET` | `/api/export/timesheet.pdf` | office / admin | PDF report |
 | `GET` `PUT` | `/api/org` | any / admin | own organisation |
 | `GET` `POST` | `/api/orgs` | admin | all organisations / create |
 | `PATCH` | `/api/orgs/{id}` | admin | branding of any organisation |
@@ -148,7 +158,8 @@ organizations ─┬─ users ─┬─ workdays ─┬─ segments ── accou
 ```
 
 Timestamps are UTC milliseconds; the day is derived from the organisation's
-timezone. A shift that crosses midnight stays on the day it started.
+timezone. A shift that crosses midnight stays on the day it started. Each
+segment carries the `note` and `material` that were entered when it was closed.
 
 ## Deployment
 
@@ -163,11 +174,12 @@ The service binds to `127.0.0.1:9095`. Put a reverse proxy in front for TLS
 ## Status
 
 Implemented: domain model and state machine, SQLite storage, REST API, web UI
-(punch, history, statistics, team, settings, admin), multi-tenancy, roles,
-balances, German/English, JSON backup.
+(punch, history, search, statistics, team, settings, admin), multi-tenancy,
+roles, balances, notes and materials, German/English, JSON backup, XLSX and PDF
+export, account delete/archive/restore.
 
-Next: Tauri clients with an offline outbox, XLSX/PDF export, SMTP for password
-reset, and a corrections UI in the office view.
+Next: Tauri clients with an offline outbox, SMTP for password reset, and editing
+the *times* of past segments (notes are already editable).
 
 ## License
 
