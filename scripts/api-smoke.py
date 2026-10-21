@@ -14,6 +14,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 BASE = os.environ.get("BASE", "http://127.0.0.1:9095")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@daywerk.local")
@@ -24,7 +25,7 @@ results: list[str] = []
 
 def call(path, token=None, method="GET", body=None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(f"{BASE}{path}", data=data, method=method)
+    req = urllib.request.Request(f"{BASE}{quote(path, safe='/?&=')}", data=data, method=method)
     if data:
         req.add_header("Content-Type", "application/json")
     if token:
@@ -141,6 +142,80 @@ def main() -> int:
 
     status, _ = call(f"/api/days?user_id={team[0]['user']['id']}", tokens["worker@test.local"])
     check(status == 403, f"employee cannot read another user id ({status})")
+
+    # ---- employees may create work accounts themselves -----------------
+    worker_token = tokens["worker@test.local"]
+    status, own_account = call(
+        "/api/accounts", worker_token, "POST", {"name": "Lager", "kind": "work"}
+    )
+    check(status == 200, f"employee creates a work account ({status})")
+
+    status, _ = call("/api/accounts", worker_token, "POST", {"name": "lager", "kind": "work"})
+    check(status == 409, f"duplicate active account name rejected ({status})")
+
+    status, _ = call("/api/accounts", worker_token, "POST", {"name": "Extra", "kind": "break"})
+    check(status == 403, f"employee cannot create a break account ({status})")
+
+    # ---- notes and materials on a transition ---------------------------
+    status, day = call(
+        "/api/punch", worker_token, "POST",
+        {"action": "start", "account_id": work["id"]},
+    )
+    check(status == 200, f"reopen the closed day ({status})")
+
+    status, day = call(
+        "/api/punch", worker_token, "POST",
+        {
+            "action": "start",
+            "account_id": own_account["id"],
+            "note": "Regal aufgefüllt",
+            "material": "2x Kabel 3m",
+        },
+    )
+    check(status == 200, f"switch with note and material ({status})")
+
+    status, days = call("/api/days", worker_token)
+    annotated = [
+        seg for entry in days for seg in entry["segments"] if seg["note"] == "Regal aufgefüllt"
+    ]
+    check(
+        len(annotated) == 1 and annotated[0]["material"] == "2x Kabel 3m",
+        "note and material stored on the closed segment",
+    )
+
+    status, updated = call(
+        f"/api/segments/{annotated[0]['id']}", worker_token, "PATCH",
+        {"note": "Regal aufgefüllt (korrigiert)"},
+    )
+    check(
+        status == 200 and updated["note"] == "Regal aufgefüllt (korrigiert)"
+        and updated["material"] == "2x Kabel 3m",
+        f"employee edits the note of today's segment ({status})",
+    )
+
+    # ---- search --------------------------------------------------------
+    status, _ = call("/api/bookings?q=kabel", worker_token)
+    check(status == 403, f"employee cannot search bookings ({status})")
+
+    status, found = call("/api/bookings?q=kabel", tokens["office@test.local"])
+    check(status == 200 and len(found) == 1, f"office finds the booking ({status}, {len(found)})")
+
+    status, found = call("/api/bookings?q=KABEL", tokens["office@test.local"])
+    check(status == 200 and len(found) == 1, "search is case-insensitive")
+
+    status, found = call("/api/bookings?q=aufgefüllt", tokens["office@test.local"])
+    check(status == 200 and len(found) == 1, "search folds umlauts")
+
+    status, found = call(
+        f"/api/bookings?q=kabel&org_id={org_b['id']}", tokens["office@test.local"]
+    )
+    check(len(found) == 1, "office stays inside its own organisation while searching")
+
+    status, found = call(f"/api/bookings?q=kabel&org_id={org_b['id']}", admin_token)
+    check(len(found) == 0, "admin can filter by another organisation")
+
+    status, found = call("/api/bookings?q=kabel", admin_token)
+    check(len(found) == 1, f"admin searches across organisations ({len(found)})")
 
     status, me = call("/api/profile", tokens["worker@test.local"], "PUT", {"locale": "en"})
     check(status == 200 and me["locale"] == "en", f"locale switch persists ({status})")

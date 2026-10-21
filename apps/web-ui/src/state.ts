@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { api, ApiError, getToken, setToken, type Me, type Org, type TodayData } from "./api";
 import { setLang, type Lang } from "./i18n";
 
-export type View = "today" | "history" | "stats" | "team" | "settings" | "admin";
+export type View = "today" | "history" | "search" | "stats" | "team" | "settings" | "admin";
 
 export const [me, setMe] = createSignal<Me | null>(null);
 export const [today, setToday] = createSignal<TodayData | null>(null);
@@ -68,10 +68,15 @@ export async function signOut() {
   setView("today");
 }
 
-export async function punch(action: "start" | "pause" | "stop", accountId?: string) {
+export async function punch(
+  action: "start" | "pause" | "stop",
+  accountId?: string,
+  note?: string,
+  material?: string,
+) {
   setBusy(true);
   try {
-    const data = await api.punch(action, accountId);
+    const data = await api.punch(action, accountId, note, material);
     setToday(data);
     return data;
   } finally {

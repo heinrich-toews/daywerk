@@ -17,7 +17,8 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: i64 = 1;
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, MIGRATION_V2];
+pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 pub const EPOCH_DATE: &str = "1970-01-01";
 
 #[derive(Debug, Error)]
@@ -106,6 +107,35 @@ pub struct TeamRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookingRow {
+    pub id: String,
+    pub date: String,
+    pub user_id: String,
+    pub user_name: String,
+    pub account_id: String,
+    pub account_name: String,
+    pub started_at: Millis,
+    pub ended_at: Option<Millis>,
+    pub note: String,
+    pub material: String,
+    pub org_id: String,
+    pub org_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BookingQuery<'a> {
+    pub org_id: Option<&'a str>,
+    pub user_id: Option<&'a str>,
+    pub account_id: Option<&'a str>,
+    pub from: &'a str,
+    pub to: &'a str,
+    /// Every term must match either the note or the material.
+    pub terms: &'a [String],
+    pub limit: i64,
+    pub offset: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountTotal {
     pub account_id: String,
     pub account_name: String,
@@ -157,6 +187,14 @@ impl Store {
              PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 5000;",
         )?;
+        // SQLite's lower() only folds ASCII, which mangles German umlauts.
+        conn.create_scalar_function(
+            "dw_lower",
+            1,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |ctx| Ok(ctx.get::<String>(0)?.to_lowercase()),
+        )?;
         let store = Self {
             conn: Mutex::new(conn),
         };
@@ -169,14 +207,15 @@ impl Store {
     }
 
     fn migrate(&self) -> Result<()> {
-        let conn = self.lock();
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version >= SCHEMA_VERSION {
-            return Ok(());
-        }
-        if version == 0 {
-            conn.execute_batch(SCHEMA_V1)?;
-            conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+        let mut conn = self.lock();
+        let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        while (version as usize) < MIGRATIONS.len() {
+            let sql = MIGRATIONS[version as usize];
+            let tx = conn.transaction()?;
+            tx.execute_batch(sql)?;
+            tx.pragma_update(None, "user_version", version + 1)?;
+            tx.commit()?;
+            version += 1;
         }
         Ok(())
     }
@@ -476,19 +515,28 @@ impl Store {
         is_primary: bool,
     ) -> Result<Account> {
         let id = now_id();
-        self.lock().execute(
-            "INSERT INTO accounts (id, org_id, name, kind, icon, sort_order, archived, is_primary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)",
-            params![
-                id,
-                org_id,
-                name,
-                kind_str(kind),
-                icon,
-                sort_order,
-                i64::from(is_primary)
-            ],
-        )?;
+        self.lock()
+            .execute(
+                "INSERT INTO accounts (id, org_id, name, kind, icon, sort_order, archived, is_primary)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)",
+                params![
+                    id,
+                    org_id,
+                    name.trim(),
+                    kind_str(kind),
+                    icon,
+                    sort_order,
+                    i64::from(is_primary)
+                ],
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::SqliteFailure(err, _)
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    StorageError::Conflict("an active account with this name already exists".into())
+                }
+                other => StorageError::Sql(other),
+            })?;
         self.account(&id)?.ok_or(StorageError::NotFound)
     }
 
@@ -589,7 +637,7 @@ impl Store {
         if let Some(d) = &day {
             let conn = self.lock();
             let mut stmt = conn.prepare(
-                "SELECT id, workday_id, user_id, account_id, started_at, ended_at, source
+                "SELECT id, workday_id, user_id, account_id, started_at, ended_at, source, note, material
                    FROM segments WHERE workday_id = ?1 ORDER BY started_at, id",
             )?;
             let rows = stmt.query_map(params![d.id], map_segment)?;
@@ -649,6 +697,16 @@ impl Store {
                         params![now_id(), day_id, user_id, account_id, at, source],
                     )?;
                 }
+                dw_core::Mutation::AnnotateSegment {
+                    segment_id,
+                    note,
+                    material,
+                } => {
+                    tx.execute(
+                        "UPDATE segments SET note = ?2, material = ?3 WHERE id = ?1",
+                        params![segment_id, note, material],
+                    )?;
+                }
                 dw_core::Mutation::CloseSegment { segment_id, at } => {
                     tx.execute(
                         "UPDATE segments SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL",
@@ -679,6 +737,26 @@ impl Store {
         date: &str,
         source: &str,
     ) -> Result<(DayView, dw_core::Outcome)> {
+        self.punch_with(
+            user,
+            action,
+            now,
+            date,
+            source,
+            &dw_core::Annotation::default(),
+        )
+    }
+
+    /// Run one button press and store `annotation` on the segment it closes.
+    pub fn punch_with(
+        &self,
+        user: &User,
+        action: &Action,
+        now: Millis,
+        date: &str,
+        source: &str,
+        annotation: &dw_core::Annotation,
+    ) -> Result<(DayView, dw_core::Outcome)> {
         let snap = self.snapshot(&user.id, &user.org_id, date)?;
         // A shift that crossed midnight keeps writing to the day it started on.
         let effective = snap
@@ -686,7 +764,7 @@ impl Store {
             .as_ref()
             .map(|d| d.date.clone())
             .unwrap_or_else(|| date.to_string());
-        let plan = dw_core::plan(&snap, action, now, &effective)
+        let plan = dw_core::plan_with(&snap, action, now, &effective, annotation)
             .map_err(|e| StorageError::Conflict(e.to_string()))?;
         self.apply_plan(&user.id, &effective, &plan, now, source)?;
         let snap = self.snapshot(&user.id, &user.org_id, &effective)?;
@@ -723,7 +801,7 @@ impl Store {
         drop(stmt);
 
         let mut seg_stmt = conn.prepare(
-            "SELECT id, workday_id, user_id, account_id, started_at, ended_at, source
+            "SELECT id, workday_id, user_id, account_id, started_at, ended_at, source, note, material
                FROM segments WHERE workday_id = ?1 ORDER BY started_at, id",
         )?;
         let mut out = Vec::with_capacity(days.len());
@@ -741,6 +819,105 @@ impl Store {
         Ok(out)
     }
 
+    pub fn segment(&self, id: &str) -> Result<Option<Segment>> {
+        let conn = self.lock();
+        Ok(conn
+            .query_row(
+                "SELECT id, workday_id, user_id, account_id, started_at, ended_at, source, note, material
+                   FROM segments WHERE id = ?1",
+                params![id],
+                map_segment,
+            )
+            .optional()?)
+    }
+
+    pub fn workday_by_id(&self, id: &str) -> Result<Option<Workday>> {
+        let conn = self.lock();
+        Ok(conn
+            .query_row(
+                "SELECT id, user_id, date, opened_at, closed_at, status
+                   FROM workdays WHERE id = ?1",
+                params![id],
+                map_workday,
+            )
+            .optional()?)
+    }
+
+    /// Rewrite the note/material of one segment. Times are never touched here.
+    pub fn update_segment_note(
+        &self,
+        id: &str,
+        note: &str,
+        material: &str,
+        edited_by: &str,
+        at: Millis,
+    ) -> Result<Segment> {
+        self.lock().execute(
+            "UPDATE segments SET note = ?2, material = ?3, edited_by = ?4, edited_at = ?5
+              WHERE id = ?1",
+            params![id, note.trim(), material.trim(), edited_by, at],
+        )?;
+        self.segment(id)?.ok_or(StorageError::NotFound)
+    }
+
+    /// Full text search over segment notes and materials.
+    pub fn search_bookings(&self, q: &BookingQuery<'_>) -> Result<Vec<BookingRow>> {
+        use rusqlite::types::Value;
+
+        let mut sql = String::from(
+            "SELECT s.id, w.date, u.id, u.name, a.id, a.name, s.started_at, s.ended_at,
+                    s.note, s.material, o.id, o.name
+               FROM segments s
+               JOIN workdays w ON w.id = s.workday_id
+               JOIN users u ON u.id = s.user_id
+               JOIN accounts a ON a.id = s.account_id
+               JOIN organizations o ON o.id = u.org_id
+              WHERE w.date BETWEEN ?1 AND ?2",
+        );
+        let mut values: Vec<Value> = vec![Value::Text(q.from.into()), Value::Text(q.to.into())];
+
+        let mut bind = |sql: &mut String, value: Value, clause: &str| {
+            values.push(value);
+            sql.push_str(&clause.replace("{}", &values.len().to_string()));
+        };
+
+        if let Some(org) = q.org_id {
+            bind(&mut sql, Value::Text(org.into()), " AND u.org_id = ?{}");
+        }
+        if let Some(user) = q.user_id {
+            bind(&mut sql, Value::Text(user.into()), " AND s.user_id = ?{}");
+        }
+        if let Some(account) = q.account_id {
+            bind(
+                &mut sql,
+                Value::Text(account.into()),
+                " AND s.account_id = ?{}",
+            );
+        }
+        for term in q.terms {
+            if term.trim().is_empty() {
+                continue;
+            }
+            let pattern = format!("%{}%", escape_like(&term.to_lowercase()));
+            bind(
+                &mut sql,
+                Value::Text(pattern),
+                " AND (dw_lower(s.note) LIKE ?{} ESCAPE '\\' OR dw_lower(s.material) LIKE ?{} ESCAPE '\\')",
+            );
+        }
+
+        // The term clause contains ?{} twice; bind() substitutes the same
+        // number into both, which SQLite allows.
+        sql.push_str(" ORDER BY s.started_at DESC");
+        bind(&mut sql, Value::Integer(q.limit), " LIMIT ?{}");
+        bind(&mut sql, Value::Integer(q.offset), " OFFSET ?{}");
+
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(values), map_booking)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     // ---- balances and statistics ---------------------------------------
 
     fn segments_in_range(
@@ -752,7 +929,7 @@ impl Store {
     ) -> Result<Vec<(Segment, AccountKind)>> {
         let mut stmt = conn.prepare(
             "SELECT s.id, s.workday_id, s.user_id, s.account_id, s.started_at, s.ended_at, s.source,
-                    a.kind
+                    s.note, s.material, a.kind
                FROM segments s
                JOIN workdays w ON w.id = s.workday_id
                JOIN accounts a ON a.id = s.account_id
@@ -760,7 +937,7 @@ impl Store {
               ORDER BY s.started_at",
         )?;
         let rows = stmt.query_map(params![user_id, from, to], |row| {
-            let kind: String = row.get(7)?;
+            let kind: String = row.get(9)?;
             Ok((map_segment(row)?, kind_from(&kind)))
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -1306,6 +1483,30 @@ fn map_account(row: &Row<'_>) -> rusqlite::Result<Account> {
     })
 }
 
+fn map_booking(row: &Row<'_>) -> rusqlite::Result<BookingRow> {
+    Ok(BookingRow {
+        id: row.get(0)?,
+        date: row.get(1)?,
+        user_id: row.get(2)?,
+        user_name: row.get(3)?,
+        account_id: row.get(4)?,
+        account_name: row.get(5)?,
+        started_at: row.get(6)?,
+        ended_at: row.get(7)?,
+        note: row.get(8)?,
+        material: row.get(9)?,
+        org_id: row.get(10)?,
+        org_name: row.get(11)?,
+    })
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 fn map_workday(row: &Row<'_>) -> rusqlite::Result<Workday> {
     let status: String = row.get(5)?;
     Ok(Workday {
@@ -1331,6 +1532,8 @@ fn map_segment(row: &Row<'_>) -> rusqlite::Result<Segment> {
         started_at: row.get(4)?,
         ended_at: row.get(5)?,
         source: row.get(6)?,
+        note: row.get(7)?,
+        material: row.get(8)?,
     })
 }
 
@@ -1524,6 +1727,13 @@ CREATE TABLE audit_log (
     at        INTEGER NOT NULL
 );
 CREATE INDEX idx_audit_org ON audit_log(org_id, at);
+"#;
+
+const MIGRATION_V2: &str = r#"
+ALTER TABLE segments ADD COLUMN note TEXT NOT NULL DEFAULT '';
+ALTER TABLE segments ADD COLUMN material TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX account_name_unique
+    ON accounts(org_id, name COLLATE NOCASE) WHERE archived = 0;
 "#;
 
 #[cfg(test)]
@@ -1865,6 +2075,319 @@ mod tests {
             .unwrap();
         assert_eq!(days.len(), 1);
         assert_eq!(days[0].segments.len(), 1);
+    }
+
+    #[test]
+    fn notes_are_stored_on_the_closed_segment() {
+        use dw_core::{Action, Annotation};
+
+        let (store, org, user) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let work = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Work)
+            .unwrap()
+            .clone();
+
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: work.id.clone(),
+                },
+                NOW,
+                DATE,
+                "test",
+            )
+            .unwrap();
+        store
+            .punch_with(
+                &user,
+                &Action::Stop,
+                NOW + 3_600_000,
+                DATE,
+                "test",
+                &Annotation {
+                    note: "  Anschluss erneuert  ".into(),
+                    material: "3x Kupferrohr 15 mm".into(),
+                },
+            )
+            .unwrap();
+
+        let seg = store
+            .segment(
+                &store
+                    .days_between(&user.id, &org.id, DATE, DATE, NOW)
+                    .unwrap()[0]
+                    .segments[0]
+                    .id,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(seg.note, "Anschluss erneuert");
+        assert_eq!(seg.material, "3x Kupferrohr 15 mm");
+    }
+
+    #[test]
+    fn notes_can_be_edited_without_touching_times() {
+        let (store, org, user) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let work = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Work)
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: work.id.clone(),
+                },
+                NOW,
+                DATE,
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(&user, &Action::Stop, NOW + 60_000, DATE, "test")
+            .unwrap();
+
+        let day = &store
+            .days_between(&user.id, &org.id, DATE, DATE, NOW)
+            .unwrap()[0];
+        let before = day.segments[0].clone();
+        let updated = store
+            .update_segment_note(&before.id, "Nachtrag", "Kabel", &user.id, NOW)
+            .unwrap();
+
+        assert_eq!(updated.note, "Nachtrag");
+        assert_eq!(updated.material, "Kabel");
+        assert_eq!(updated.started_at, before.started_at);
+        assert_eq!(updated.ended_at, before.ended_at);
+    }
+
+    #[test]
+    fn duplicate_account_names_are_rejected_case_insensitively() {
+        let (store, org, _) = store();
+        let err = store.create_account(&org.id, "allgemein", AccountKind::Work, None, 100, false);
+        assert!(matches!(err, Err(StorageError::Conflict(_))));
+    }
+
+    #[test]
+    fn search_matches_notes_and_materials() {
+        use dw_core::{Action, Annotation};
+
+        let (store, org, user) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let work = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Work)
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: work.id.clone(),
+                },
+                NOW,
+                DATE,
+                "test",
+            )
+            .unwrap();
+        store
+            .punch_with(
+                &user,
+                &Action::Stop,
+                NOW + 3_600_000,
+                DATE,
+                "test",
+                &Annotation {
+                    note: "Anschluss für Müller erneuert".into(),
+                    material: "3x Kupferrohr 15 mm".into(),
+                },
+            )
+            .unwrap();
+
+        let search = |term: &str| {
+            let terms = vec![term.to_string()];
+            store
+                .search_bookings(&BookingQuery {
+                    org_id: Some(&org.id),
+                    user_id: None,
+                    account_id: None,
+                    from: DATE,
+                    to: DATE,
+                    terms: &terms,
+                    limit: 50,
+                    offset: 0,
+                })
+                .unwrap()
+        };
+
+        assert_eq!(
+            search("kupferrohr").len(),
+            1,
+            "matches material, case-insensitive"
+        );
+        assert_eq!(search("KUPFERROHR").len(), 1);
+        assert_eq!(search("anschluss").len(), 1, "matches note");
+        assert_eq!(search("müller").len(), 1, "umlauts fold correctly");
+        assert_eq!(search("MÜLLER").len(), 1);
+        assert_eq!(search("nichts").len(), 0);
+
+        let terms = vec!["kupferrohr".into(), "müller".into()];
+        let both = store
+            .search_bookings(&BookingQuery {
+                org_id: Some(&org.id),
+                user_id: None,
+                account_id: None,
+                from: DATE,
+                to: DATE,
+                terms: &terms,
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap();
+        assert_eq!(both.len(), 1, "all terms must match");
+
+        let terms = vec!["kupferrohr".into(), "gibtsnicht".into()];
+        let none = store
+            .search_bookings(&BookingQuery {
+                org_id: Some(&org.id),
+                user_id: None,
+                account_id: None,
+                from: DATE,
+                to: DATE,
+                terms: &terms,
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap();
+        assert!(none.is_empty(), "AND across terms");
+    }
+
+    #[test]
+    fn search_is_scoped_to_the_organisation() {
+        use dw_core::{Action, Annotation};
+
+        let (store, org, user) = store();
+        let other = store
+            .create_org("Other", "other", "Europe/Berlin", 480)
+            .unwrap();
+        store.ensure_default_accounts(&other.id).unwrap();
+        let other_user = store
+            .create_user(&NewUser {
+                org_id: other.id.clone(),
+                email: "b@example.org".into(),
+                name: "Berta".into(),
+                password_hash: "x".into(),
+                role: Role::Employee,
+                locale: "de".into(),
+                daily_target_minutes: None,
+            })
+            .unwrap();
+
+        for (u, o) in [(&user, &org), (&other_user, &other)] {
+            let accounts = store.accounts(&o.id, false).unwrap();
+            let work = accounts
+                .iter()
+                .find(|a| a.kind == AccountKind::Work)
+                .unwrap();
+            store
+                .punch(
+                    u,
+                    &Action::Start {
+                        account_id: work.id.clone(),
+                    },
+                    NOW,
+                    DATE,
+                    "test",
+                )
+                .unwrap();
+            store
+                .punch_with(
+                    u,
+                    &Action::Stop,
+                    NOW + 60_000,
+                    DATE,
+                    "test",
+                    &Annotation {
+                        note: "gleiche Notiz".into(),
+                        material: String::new(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let terms = vec!["gleiche".to_string()];
+        let own = store
+            .search_bookings(&BookingQuery {
+                org_id: Some(&org.id),
+                user_id: None,
+                account_id: None,
+                from: DATE,
+                to: DATE,
+                terms: &terms,
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap();
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].org_id, org.id);
+
+        let all = store
+            .search_bookings(&BookingQuery {
+                org_id: None,
+                user_id: None,
+                account_id: None,
+                from: DATE,
+                to: DATE,
+                terms: &terms,
+                limit: 50,
+                offset: 0,
+            })
+            .unwrap();
+        assert_eq!(all.len(), 2, "no org filter returns everything");
+    }
+
+    #[test]
+    fn upgrades_a_v1_database_in_place() {
+        let path = std::env::temp_dir().join(format!("daywerk-mig-{}.db", uuid::Uuid::new_v4()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute(
+                "INSERT INTO organizations (id, name, slug, created_at) VALUES ('o1','Old','old',0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 2);
+        assert_eq!(store.orgs().unwrap().len(), 1, "existing data survives");
+
+        // the new columns and the new index are usable
+        let conn = store.lock();
+        let cols: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('segments') WHERE name IN ('note','material')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 2);
+        let idx: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='account_name_unique'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1);
+        drop(conn);
+        drop(store);
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

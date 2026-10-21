@@ -43,6 +43,8 @@ export interface Segment {
   started_at: number;
   ended_at: number | null;
   source: string;
+  note: string;
+  material: string;
 }
 
 export interface Workday {
@@ -118,6 +120,21 @@ export interface Stats {
   total: Balance;
   per_account: { account_id: string; account_name: string; kind: AccountKind; ms: number }[];
   per_day: { date: string; work_ms: number; break_ms: number }[];
+}
+
+export interface BookingRow {
+  id: string;
+  date: string;
+  user_id: string;
+  user_name: string;
+  account_id: string;
+  account_name: string;
+  started_at: number;
+  ended_at: number | null;
+  note: string;
+  material: string;
+  org_id: string;
+  org_name: string;
 }
 
 export interface TeamRow {
@@ -217,11 +234,33 @@ export const api = {
 
   today: () => request<TodayData>("/api/today"),
 
-  punch: (action: "start" | "pause" | "stop", accountId?: string) =>
+  punch: (
+    action: "start" | "pause" | "stop",
+    accountId?: string,
+    note?: string,
+    material?: string,
+  ) =>
     request<TodayData>("/api/punch", {
       method: "POST",
-      body: JSON.stringify({ action, account_id: accountId }),
+      body: JSON.stringify({ action, account_id: accountId, note, material }),
     }),
+
+  updateSegmentNote: (id: string, note: string, material: string) =>
+    request<Segment>(`/api/segments/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ note, material }),
+    }),
+
+  bookings: (params: {
+    q?: string;
+    from?: string;
+    to?: string;
+    user_id?: string;
+    account_id?: string;
+    org_id?: string;
+    limit?: number;
+    offset?: number;
+  }) => request<BookingRow[]>(`/api/bookings${qs(params)}`),
 
   days: (from: string, to: string, userId?: string) =>
     request<DayView[]>(`/api/days${qs({ from, to, user_id: userId })}`),

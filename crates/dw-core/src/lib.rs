@@ -70,6 +70,12 @@ pub struct Segment {
     pub ended_at: Option<Millis>,
     #[serde(default)]
     pub source: String,
+    /// Free text attached when the segment is closed.
+    #[serde(default)]
+    pub note: String,
+    /// Materials used, free text.
+    #[serde(default)]
+    pub material: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +106,19 @@ pub enum Action {
     Stop,
 }
 
+/// Notes the user entered while closing a segment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Annotation {
+    pub note: String,
+    pub material: String,
+}
+
+impl Annotation {
+    pub fn is_empty(&self) -> bool {
+        self.note.trim().is_empty() && self.material.trim().is_empty()
+    }
+}
+
 /// Everything the planner needs to know. `segments` must be ordered by
 /// `started_at` ascending.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,13 +132,37 @@ pub struct Snapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mutation", rename_all = "snake_case")]
 pub enum Mutation {
-    OpenDay { date: String, at: Millis },
-    ReopenDay { at: Millis },
-    CloseDay { at: Millis },
-    OpenSegment { account_id: Id, at: Millis },
-    CloseSegment { segment_id: Id, at: Millis },
-    SetSegmentEnd { segment_id: Id, at: Millis },
-    DeleteSegment { segment_id: Id },
+    OpenDay {
+        date: String,
+        at: Millis,
+    },
+    ReopenDay {
+        at: Millis,
+    },
+    CloseDay {
+        at: Millis,
+    },
+    OpenSegment {
+        account_id: Id,
+        at: Millis,
+    },
+    /// Written just before the segment is closed.
+    AnnotateSegment {
+        segment_id: Id,
+        note: String,
+        material: String,
+    },
+    CloseSegment {
+        segment_id: Id,
+        at: Millis,
+    },
+    SetSegmentEnd {
+        segment_id: Id,
+        at: Millis,
+    },
+    DeleteSegment {
+        segment_id: Id,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,17 +221,40 @@ fn kind_of(snapshot: &Snapshot, id: &Id) -> Result<AccountKind, CoreError> {
         .ok_or_else(|| CoreError::UnknownAccount(id.clone()))
 }
 
+fn push_annotation(mutations: &mut Vec<Mutation>, segment_id: &Id, annotation: &Annotation) {
+    if annotation.is_empty() {
+        return;
+    }
+    mutations.push(Mutation::AnnotateSegment {
+        segment_id: segment_id.clone(),
+        note: annotation.note.trim().to_string(),
+        material: annotation.material.trim().to_string(),
+    });
+}
+
 /// The segment that is currently running, if any.
 pub fn active_segment(snapshot: &Snapshot) -> Option<&Segment> {
     snapshot.segments.iter().find(|s| s.ended_at.is_none())
 }
 
-/// Compute the mutations for one button press.
+/// Compute the mutations for one button press without notes.
 pub fn plan(
     snapshot: &Snapshot,
     action: &Action,
     now: Millis,
     date: &str,
+) -> Result<Plan, CoreError> {
+    plan_with(snapshot, action, now, date, &Annotation::default())
+}
+
+/// Like [`plan`], but attaches `annotation` to the work segment this action
+/// closes. Breaks are never annotated — they are either resumed or deleted.
+pub fn plan_with(
+    snapshot: &Snapshot,
+    action: &Action,
+    now: Millis,
+    date: &str,
+    annotation: &Annotation,
 ) -> Result<Plan, CoreError> {
     let active = active_segment(snapshot);
 
@@ -228,6 +294,9 @@ pub fn plan(
 
             let outcome = match active {
                 Some(seg) => {
+                    if kind_of(snapshot, &seg.account_id)? == AccountKind::Work {
+                        push_annotation(&mut mutations, &seg.id, annotation);
+                    }
                     mutations.push(Mutation::CloseSegment {
                         segment_id: seg.id.clone(),
                         at: now,
@@ -269,17 +338,19 @@ pub fn plan(
                 .find(|a| a.kind == AccountKind::Break && !a.archived)
                 .ok_or(CoreError::MissingBreakAccount)?;
 
+            let mut mutations = Vec::new();
+            push_annotation(&mut mutations, &seg.id, annotation);
+            mutations.push(Mutation::CloseSegment {
+                segment_id: seg.id.clone(),
+                at: now,
+            });
+            mutations.push(Mutation::OpenSegment {
+                account_id: brk.id.clone(),
+                at: now,
+            });
+
             Ok(Plan {
-                mutations: vec![
-                    Mutation::CloseSegment {
-                        segment_id: seg.id.clone(),
-                        at: now,
-                    },
-                    Mutation::OpenSegment {
-                        account_id: brk.id.clone(),
-                        at: now,
-                    },
-                ],
+                mutations,
                 outcome: Outcome::Paused {
                     from: seg.account_id.clone(),
                 },
@@ -326,6 +397,7 @@ pub fn plan(
                             closed_work: last_work.map(|w| w.account_id.clone()),
                         }
                     } else {
+                        push_annotation(&mut mutations, &seg.id, annotation);
                         mutations.push(Mutation::CloseSegment {
                             segment_id: seg.id.clone(),
                             at: now,
@@ -425,6 +497,8 @@ mod tests {
             started_at: start,
             ended_at: end,
             source: "test".into(),
+            note: String::new(),
+            material: String::new(),
         }
     }
 
@@ -726,6 +800,114 @@ mod tests {
         assert_eq!(
             plan(&s, &Action::Pause, NOW, DATE),
             Err(CoreError::MissingBreakAccount)
+        );
+    }
+
+    fn note(note: &str, material: &str) -> Annotation {
+        Annotation {
+            note: note.into(),
+            material: material.into(),
+        }
+    }
+
+    #[test]
+    fn annotation_is_written_before_the_segment_closes() {
+        let s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
+        let p = plan_with(
+            &s,
+            &start("customer"),
+            NOW,
+            DATE,
+            &note(" Anschluss ", " 3x Rohr "),
+        )
+        .unwrap();
+
+        let idx_annotate = p
+            .mutations
+            .iter()
+            .position(|m| matches!(m, Mutation::AnnotateSegment { .. }))
+            .expect("annotation mutation");
+        let idx_close = p
+            .mutations
+            .iter()
+            .position(|m| matches!(m, Mutation::CloseSegment { .. }))
+            .expect("close mutation");
+        assert!(idx_annotate < idx_close, "annotation must be written first");
+
+        assert_eq!(
+            p.mutations[idx_annotate],
+            Mutation::AnnotateSegment {
+                segment_id: "s1".into(),
+                note: "Anschluss".into(),
+                material: "3x Rohr".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn annotation_is_attached_when_pausing() {
+        let s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
+        let p = plan_with(&s, &Action::Pause, NOW, DATE, &note("Pause", "")).unwrap();
+        assert!(p.mutations.iter().any(|m| matches!(
+            m,
+            Mutation::AnnotateSegment { segment_id, .. } if segment_id == "s1"
+        )));
+    }
+
+    #[test]
+    fn annotation_is_attached_when_stopping_work() {
+        let s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
+        let p = plan_with(&s, &Action::Stop, NOW, DATE, &note("", "Kabel")).unwrap();
+        assert!(
+            p.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::AnnotateSegment { .. }))
+        );
+    }
+
+    #[test]
+    fn annotation_is_dropped_when_nothing_closes() {
+        // First press of the day: no segment is closed, nothing to annotate.
+        let s = snap(vec![], None);
+        let p = plan_with(&s, &start("general"), NOW, DATE, &note("x", "y")).unwrap();
+        assert!(
+            !p.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::AnnotateSegment { .. }))
+        );
+    }
+
+    #[test]
+    fn break_segments_are_never_annotated() {
+        // Stop while paused: the break is deleted, no annotation is written.
+        let s = snap(
+            vec![
+                seg("s1", "general", 100, Some(200)),
+                seg("s2", "pause", 200, None),
+            ],
+            Some(DayStatus::Open),
+        );
+        let p = plan_with(&s, &Action::Stop, NOW, DATE, &note("x", "y")).unwrap();
+        assert!(
+            !p.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::AnnotateSegment { .. }))
+        );
+        assert!(
+            p.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::DeleteSegment { .. }))
+        );
+    }
+
+    #[test]
+    fn empty_annotation_is_not_written() {
+        let s = snap(vec![seg("s1", "general", 100, None)], Some(DayStatus::Open));
+        let p = plan_with(&s, &start("customer"), NOW, DATE, &note("   ", "")).unwrap();
+        assert!(
+            !p.mutations
+                .iter()
+                .any(|m| matches!(m, Mutation::AnnotateSegment { .. }))
         );
     }
 

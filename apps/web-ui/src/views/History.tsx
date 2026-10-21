@@ -1,8 +1,18 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
-import { api, type DayView as DayViewData } from "../api";
-import { balanceClass, dur, longDate, monthStartIso, timeOfDay, todayIso } from "../format";
+import { api, type DayView as DayViewData, type Segment } from "../api";
+import NoteSheet from "../components/NoteSheet";
+import {
+  balanceClass,
+  dur,
+  longDate,
+  monthStartIso,
+  timeOfDay,
+  todayIso,
+} from "../format";
 import { locale, t } from "../i18n";
 import { me } from "../state";
+
+type Editing = { id: string; note: string; material: string };
 
 export default function History() {
   const [from, setFrom] = createSignal(monthStartIso());
@@ -10,23 +20,47 @@ export default function History() {
   const [items, setItems] = createSignal<DayViewData[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
+  const [editing, setEditing] = createSignal<Editing | null>(null);
+
+  async function load(f: string, until: string) {
+    setLoading(true);
+    try {
+      setItems(await api.days(f, until));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   createEffect(() => {
     const f = from();
     const until = to();
-    setLoading(true);
-    api
-      .days(f, until)
-      .then((rows) => {
-        setItems(rows);
-        setError(null);
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
+    void load(f, until);
   });
 
   const accountName = (id: string) => me()?.accounts.find((a) => a.id === id)?.name ?? "—";
   const target = () => (me()?.target_minutes ?? 0) * 60_000;
+
+  const canEdit = (segment: Segment, date: string) => {
+    const user = me()?.user;
+    if (!user) return false;
+    if (user.role === "admin" || user.role === "office") return true;
+    return segment.user_id === user.id && date === todayIso();
+  };
+
+  async function saveNote(note: string, material: string) {
+    const current = editing();
+    if (!current) return;
+    setEditing(null);
+    try {
+      await api.updateSegmentNote(current.id, note, material);
+      await load(from(), to());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   return (
     <div class="space-y-4">
@@ -68,9 +102,7 @@ export default function History() {
       <Show when={!loading()} fallback={<p class="text-sm text-muted">{t("common.loading")}</p>}>
         <Show
           when={items().length > 0}
-          fallback={
-            <p class="card p-6 text-center text-sm text-muted">{t("history.empty")}</p>
-          }
+          fallback={<p class="card p-6 text-center text-sm text-muted">{t("history.empty")}</p>}
         >
           <div class="space-y-3">
             <For each={items()}>
@@ -97,22 +129,52 @@ export default function History() {
                     </div>
                   </header>
 
-                  <div class="mt-2 space-y-1">
+                  <div class="mt-2 space-y-1.5">
                     <For each={entry.segments}>
                       {(segment) => (
-                        <div class="flex items-baseline justify-between gap-2 rounded-md bg-soft/60 px-2 py-1 text-sm">
-                          <span class="min-w-0 truncate font-medium">
-                            {accountName(segment.account_id)}
-                          </span>
-                          <span class="shrink-0 tabular-nums text-muted">
-                            {timeOfDay(segment.started_at, locale())}–
-                            {segment.ended_at
-                              ? timeOfDay(segment.ended_at, locale())
-                              : "…"}
-                            <span class="ml-2 font-semibold text-foreground">
-                              {dur((segment.ended_at ?? segment.started_at) - segment.started_at)}
+                        <div class="rounded-md bg-soft/60 px-2 py-1.5 text-sm">
+                          <div class="flex items-baseline justify-between gap-2">
+                            <span class="min-w-0 truncate font-medium">
+                              {accountName(segment.account_id)}
                             </span>
-                          </span>
+                            <span class="flex shrink-0 items-center gap-2 tabular-nums text-muted">
+                              {timeOfDay(segment.started_at, locale())}–
+                              {segment.ended_at ? timeOfDay(segment.ended_at, locale()) : "…"}
+                              <span class="font-semibold text-foreground">
+                                {dur(
+                                  (segment.ended_at ?? segment.started_at) - segment.started_at,
+                                )}
+                              </span>
+                              <Show when={canEdit(segment, entry.day.date)}>
+                                <button
+                                  type="button"
+                                  class="rounded px-1 text-muted hover:bg-card hover:text-primary"
+                                  title={t("note.edit")}
+                                  onClick={() =>
+                                    setEditing({
+                                      id: segment.id,
+                                      note: segment.note,
+                                      material: segment.material,
+                                    })
+                                  }
+                                >
+                                  ✎
+                                </button>
+                              </Show>
+                            </span>
+                          </div>
+                          <Show when={segment.note}>
+                            <p class="mt-1 text-xs text-muted">
+                              <span class="font-semibold uppercase">{t("note.note")}:</span>{" "}
+                              {segment.note}
+                            </p>
+                          </Show>
+                          <Show when={segment.material}>
+                            <p class="text-xs text-muted">
+                              <span class="font-semibold uppercase">{t("note.material")}:</span>{" "}
+                              {segment.material}
+                            </p>
+                          </Show>
                         </div>
                       )}
                     </For>
@@ -137,6 +199,19 @@ export default function History() {
             </For>
           </div>
         </Show>
+      </Show>
+
+      <Show when={editing()} keyed>
+        {(current) => (
+          <NoteSheet
+            open={true}
+            title={t("note.edit")}
+            initialNote={current.note}
+            initialMaterial={current.material}
+            onClose={() => setEditing(null)}
+            onSave={saveNote}
+          />
+        )}
       </Show>
     </div>
   );

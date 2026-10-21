@@ -20,9 +20,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_http::cors::CorsLayer;
 
-use dw_core::{Account, AccountKind, Action, Millis, Outcome, Role};
+use dw_core::{Account, AccountKind, Action, Annotation, Millis, Outcome, Role};
 use dw_storage::{
-    Balance, DayView, EPOCH_DATE, NewUser, Org, Stats, StorageError, Store, TeamRow, User,
+    Balance, BookingQuery, BookingRow, DayView, EPOCH_DATE, NewUser, Org, Stats, StorageError,
+    Store, TeamRow, User,
 };
 
 // ---------------------------------------------------------------- state
@@ -232,6 +233,51 @@ struct PunchRequest {
     account_id: Option<String>,
     #[serde(default)]
     source: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    material: Option<String>,
+}
+
+const MAX_NOTE_LEN: usize = 2000;
+
+fn clean_text(value: Option<String>) -> Result<String, ApiError> {
+    let text = value.unwrap_or_default();
+    let trimmed = text.trim();
+    if trimmed.chars().count() > MAX_NOTE_LEN {
+        return Err(ApiError::BadRequest(format!(
+            "text is longer than {MAX_NOTE_LEN} characters"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+#[derive(Deserialize)]
+struct UpdateSegmentRequest {
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    material: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct BookingParams {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    account_id: Option<String>,
+    #[serde(default)]
+    org_id: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default)]
+    offset: Option<i64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -528,8 +574,15 @@ async fn punch(
     let org = state.store.org(&user.org_id)?.ok_or(ApiError::NotFound)?;
     let date = local_date(now_ms(), &org.timezone);
     let source = req.source.as_deref().unwrap_or("web");
+    let annotation = Annotation {
+        note: clean_text(req.note)?,
+        material: clean_text(req.material)?,
+    };
 
-    let (_, outcome) = state.store.punch(&user, &action, now_ms(), &date, source)?;
+    let (_, outcome) =
+        state
+            .store
+            .punch_with(&user, &action, now_ms(), &date, source, &annotation)?;
 
     if matches!(
         outcome,
@@ -716,15 +769,43 @@ async fn create_account(
     Json(req): Json<NewAccountRequest>,
 ) -> Result<Json<Account>, ApiError> {
     let actor = require_auth(&state, &headers)?;
-    require_role(&actor, Role::Admin)?;
-    Ok(Json(state.store.create_account(
+
+    // Employees may add work accounts for their own organisation. Only an
+    // administrator may touch the break account or promote a primary account.
+    let (kind, sort_order, is_primary) = if actor.role.is_admin() {
+        (req.kind, req.sort_order, req.is_primary)
+    } else {
+        if req.kind != AccountKind::Work {
+            return Err(ApiError::Forbidden);
+        }
+        (AccountKind::Work, 100, false)
+    };
+
+    let name = req.name.trim();
+    if name.is_empty() || name.chars().count() > 60 {
+        return Err(ApiError::BadRequest(
+            "name must be between 1 and 60 characters".into(),
+        ));
+    }
+
+    let account = state.store.create_account(
         &actor.org_id,
-        &req.name,
-        req.kind,
+        name,
+        kind,
         req.icon.as_deref(),
-        req.sort_order,
-        req.is_primary,
-    )?))
+        sort_order,
+        is_primary,
+    )?;
+    let _ = state.store.audit(
+        &actor.org_id,
+        &actor.id,
+        "account_created",
+        "account",
+        &account.id,
+        "{}",
+        now_ms(),
+    );
+    Ok(Json(account))
 }
 
 async fn update_account(
@@ -818,6 +899,104 @@ async fn update_org(
         req.daily_target_minutes,
         req.logo_path.as_deref(),
     )?))
+}
+
+async fn update_segment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UpdateSegmentRequest>,
+) -> Result<Json<dw_core::Segment>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    let segment = state.store.segment(&id)?.ok_or(ApiError::NotFound)?;
+    let day = state
+        .store
+        .workday_by_id(&segment.workday_id)?
+        .ok_or(ApiError::NotFound)?;
+    let owner = state
+        .store
+        .user(&segment.user_id)?
+        .ok_or(ApiError::NotFound)?;
+
+    let allowed = match actor.role {
+        Role::Admin => true,
+        Role::Office => owner.org_id == actor.org_id,
+        Role::Employee => {
+            owner.id == actor.id
+                && state
+                    .store
+                    .org(&owner.org_id)?
+                    .map(|org| local_date(now_ms(), &org.timezone) == day.date)
+                    .unwrap_or(false)
+        }
+    };
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let note = match req.note {
+        Some(value) => clean_text(Some(value))?,
+        None => segment.note.clone(),
+    };
+    let material = match req.material {
+        Some(value) => clean_text(Some(value))?,
+        None => segment.material.clone(),
+    };
+
+    let updated = state
+        .store
+        .update_segment_note(&id, &note, &material, &actor.id, now_ms())?;
+    let _ = state.store.audit(
+        &owner.org_id,
+        &actor.id,
+        "segment_note_updated",
+        "segment",
+        &id,
+        "{}",
+        now_ms(),
+    );
+    Ok(Json(updated))
+}
+
+/// Full text search over notes and materials. Office is scoped to its own
+/// organisation, admin may search everything.
+async fn bookings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<BookingParams>,
+) -> Result<Json<Vec<BookingRow>>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Office)?;
+
+    if let Some(user_id) = params.user_id.as_deref() {
+        let target = state.store.user(user_id)?.ok_or(ApiError::NotFound)?;
+        if !can_view_user(&actor, &target) {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
+    let org_scope = match actor.role {
+        Role::Admin => params.org_id.as_deref(),
+        _ => Some(actor.org_id.as_str()),
+    };
+    let (from, to) = range_for(&state, &actor, params.from.as_deref(), params.to.as_deref());
+    let terms: Vec<String> = params
+        .q
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+
+    Ok(Json(state.store.search_bookings(&BookingQuery {
+        org_id: org_scope,
+        user_id: params.user_id.as_deref(),
+        account_id: params.account_id.as_deref(),
+        from: &from,
+        to: &to,
+        terms: &terms,
+        limit: params.limit.unwrap_or(50).clamp(1, 200),
+        offset: params.offset.unwrap_or(0).max(0),
+    })?))
 }
 
 async fn add_adjustment(
@@ -982,6 +1161,8 @@ async fn main() {
         .route("/api/today", get(today))
         .route("/api/punch", post(punch))
         .route("/api/days", get(days))
+        .route("/api/bookings", get(bookings))
+        .route("/api/segments/{id}", patch(update_segment))
         .route("/api/stats", get(stats))
         .route("/api/team", get(team))
         .route("/api/users", get(list_users).post(create_user))

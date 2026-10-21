@@ -4,6 +4,7 @@ import { t } from "./i18n";
 import Login from "./views/Login";
 import Today from "./views/Today";
 import History from "./views/History";
+import Search from "./views/Search";
 import Stats from "./views/Stats";
 import Team from "./views/Team";
 import Settings from "./views/Settings";
@@ -26,6 +27,7 @@ function tabs(): Tab[] {
     { id: "stats", label: t("nav.stats"), icon: () => <ChartIcon /> },
   ];
   if (roleAtLeast("office")) {
+    list.push({ id: "search", label: t("nav.search"), icon: () => <ListIcon /> });
     list.push({ id: "team", label: t("nav.team"), icon: () => <UsersIcon /> });
   }
   list.push({ id: "settings", label: t("nav.settings"), icon: () => <CogIcon /> });
@@ -84,6 +86,9 @@ function Shell() {
           </Match>
           <Match when={view() === "stats"}>
             <Stats />
+          </Match>
+          <Match when={view() === "search"}>
+            <Search />
           </Match>
           <Match when={view() === "team"}>
             <Team />
