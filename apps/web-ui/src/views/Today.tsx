@@ -1,19 +1,12 @@
-import {
-  For,
-  Show,
-  createEffect,
-  createSignal,
-  onCleanup,
-  onMount,
-  type JSX,
-} from "solid-js";
+import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { api, ApiError } from "../api";
+import { clockOffset, elapsedSince, serverTime } from "../clock";
 import { Pause, Play, Stop } from "../components/Icons";
 import NoteSheet from "../components/NoteSheet";
 import Sheet from "../components/Sheet";
 import { balanceClass, dur, durSeconds, longDate, timeOfDay } from "../format";
 import { locale, t } from "../i18n";
-import { punch, refresh, today } from "../state";
+import { punch, refresh, reloadToday, today, todayReceivedAt } from "../state";
 
 function PunchButton(props: {
   label: string;
@@ -60,7 +53,6 @@ type Pending = {
 
 export default function Today() {
   const [tick, setTick] = createSignal(Date.now());
-  const [offset, setOffset] = createSignal(0);
   const [error, setError] = createSignal<string | null>(null);
   const [pending, setPending] = createSignal<Pending | null>(null);
   const [showAdd, setShowAdd] = createSignal(false);
@@ -70,15 +62,39 @@ export default function Today() {
 
   onMount(() => {
     const id = window.setInterval(() => setTick(Date.now()), 1000);
-    onCleanup(() => window.clearInterval(id));
+
+    // Coming back to the tab (or to this view after a while) should show the
+    // authoritative state, but never at the cost of a punch that is in flight.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      setTick(Date.now());
+      void reloadToday().catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    if (Date.now() - todayReceivedAt() > 60_000) {
+      void reloadToday().catch(() => undefined);
+    }
+
+    onCleanup(() => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    });
   });
 
-  createEffect(() => {
+  /**
+   * Clock offset between server and device, fixed at the moment the payload
+   * arrived. Deriving it from `Date.now()` inside render would make the offset
+   * drift on every remount — the running timer would jump back to zero.
+   */
+  const offset = () => {
     const data = today();
-    if (data) setOffset(data.now - Date.now());
-  });
+    const received = todayReceivedAt();
+    if (!data || !received) return 0;
+    return clockOffset(data.now, received);
+  };
 
-  const serverNow = () => tick() + offset();
+  const serverNow = () => serverTime(tick(), offset());
   const accounts = () => today()?.accounts ?? [];
   const primary = () =>
     accounts().find((a) => a.is_primary) ?? accounts().find((a) => a.kind === "work");
@@ -94,7 +110,7 @@ export default function Today() {
   const elapsed = () => {
     const a = active();
     if (!a) return 0;
-    return Math.max(0, serverNow() - a.started_at);
+    return elapsedSince(a.started_at, tick(), offset());
   };
 
   const liveTotals = () => {

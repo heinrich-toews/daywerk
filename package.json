@@ -7,6 +7,8 @@
     "dev": "pnpm --filter web-ui dev",
     "build": "pnpm --filter web-ui build",
     "server": "cargo run -p dw-server",
-    "test": "cargo test --workspace"
+    "test": "cargo test --workspace && pnpm --filter web-ui test",
+    "test:ui": "pnpm --filter web-ui test",
+    "test:api": "python3 scripts/api-smoke.py"
   }
 }

@@ -6,6 +6,24 @@ export type View = "today" | "history" | "search" | "stats" | "team" | "settings
 
 export const [me, setMe] = createSignal<Me | null>(null);
 export const [today, setToday] = createSignal<TodayData | null>(null);
+/**
+ * Local clock reading at the moment the current `today` payload arrived.
+ *
+ * The server sends `now` with every payload. The difference between that value
+ * and the local clock when it *arrived* is the clock offset, and it must be
+ * derived from this timestamp — not from `Date.now()` at render time, or the
+ * offset drifts every time the view remounts and the running timer appears to
+ * restart.
+ */
+export const [todayReceivedAt, setTodayReceivedAt] = createSignal(0);
+
+let todaySeq = 0;
+
+function applyToday(data: TodayData) {
+  todaySeq += 1;
+  setToday(data);
+  setTodayReceivedAt(Date.now());
+}
 export const [view, setView] = createSignal<View>("today");
 export const [booting, setBooting] = createSignal(true);
 export const [busy, setBusy] = createSignal(false);
@@ -33,7 +51,7 @@ export async function boot() {
       setMe(current);
       applyTheme(current.org);
       setLang((current.user.locale as Lang) ?? "de");
-      setToday(await api.today());
+      applyToday(await api.today());
     }
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
@@ -52,7 +70,7 @@ export async function signIn(email: string, password: string) {
   setMe(current);
   applyTheme(current.org);
   setLang((current.user.locale as Lang) ?? "de");
-  setToday(await api.today());
+  applyToday(await api.today());
   setView("today");
 }
 
@@ -65,6 +83,8 @@ export async function signOut() {
   setToken(null);
   setMe(null);
   setToday(null);
+  setTodayReceivedAt(0);
+  todaySeq += 1;
   setView("today");
 }
 
@@ -77,7 +97,7 @@ export async function punch(
   setBusy(true);
   try {
     const data = await api.punch(action, accountId, note, material);
-    setToday(data);
+    applyToday(data);
     return data;
   } finally {
     setBusy(false);
@@ -88,7 +108,17 @@ export async function refresh() {
   const current = await api.me();
   setMe(current);
   applyTheme(current.org);
-  setToday(await api.today());
+  applyToday(await api.today());
+}
+
+/**
+ * Fetch the day again. A punch that happens while this request is in flight
+ * wins: its result bumps the sequence and the stale response is discarded.
+ */
+export async function reloadToday() {
+  const before = todaySeq;
+  const data = await api.today();
+  if (before === todaySeq) applyToday(data);
 }
 
 export async function changeLocale(locale: Lang) {

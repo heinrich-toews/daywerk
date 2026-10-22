@@ -79,8 +79,8 @@ pnpm dev                   # UI on :5173, proxies /api to :9095
 Run the test suite:
 
 ```sh
-cargo test --workspace
-python3 scripts/api-smoke.py   # against a running server
+pnpm test                      # Rust workspace + web UI unit tests
+python3 scripts/api-smoke.py   # end-to-end API checks, fresh database
 ```
 
 ## Configuration
