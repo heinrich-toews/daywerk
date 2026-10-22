@@ -188,20 +188,28 @@ export default function ProjectDetail() {
               </div>
             </Show>
 
-            <TaskFormSheet
-              open={showTaskForm()}
-              projectId={detail().project.id}
-              members={members()}
-              onClose={() => setShowTaskForm(false)}
-              onSaved={() => void load()}
-            />
+            <Show when={showTaskForm() ? detail().project.id : null} keyed>
+              {(projectId) => (
+                <TaskFormSheet
+                  open={true}
+                  projectId={projectId}
+                  members={members()}
+                  onClose={() => setShowTaskForm(false)}
+                  onSaved={() => void load()}
+                />
+              )}
+            </Show>
 
-            <EditProjectSheet
-              open={showEdit()}
-              detail={detail()}
-              onClose={() => setShowEdit(false)}
-              onSaved={() => void load()}
-            />
+            <Show when={showEdit() ? detail().project.id : null} keyed>
+              {(id) => (
+                <EditProjectSheet
+                  open={true}
+                  detail={detail()}
+                  onClose={() => setShowEdit(false)}
+                  onSaved={() => void load()}
+                />
+              )}
+            </Show>
 
             <Sheet
               open={showDelete()}

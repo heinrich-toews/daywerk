@@ -413,14 +413,20 @@ export default function TaskDetail() {
               </form>
             </section>
 
-            <TaskFormSheet
-              open={showEdit()}
-              projectId={detail().task.project_id}
-              task={detail().task}
-              members={members()}
-              onClose={() => setShowEdit(false)}
-              onSaved={() => void load()}
-            />
+            {/* keyed on the task: remount per opening so the fields reflect
+                this task, not the one that was open when the view mounted */}
+            <Show when={showEdit() ? detail().task : null} keyed>
+              {(task) => (
+                <TaskFormSheet
+                  open={true}
+                  projectId={task.project_id}
+                  task={task}
+                  members={members()}
+                  onClose={() => setShowEdit(false)}
+                  onSaved={() => void load()}
+                />
+              )}
+            </Show>
           </>
         )}
       </Show>
