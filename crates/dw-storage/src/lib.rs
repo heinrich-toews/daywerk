@@ -17,7 +17,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, MIGRATION_V2];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, MIGRATION_V2, MIGRATION_V3];
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 pub const EPOCH_DATE: &str = "1970-01-01";
 
@@ -44,7 +44,16 @@ pub struct Org {
     pub color_primary: String,
     pub color_accent: String,
     pub timezone: String,
-    pub daily_target_minutes: i64,
+    /// Contract default for new employees.
+    pub default_weekly_hours: f64,
+    pub default_workdays_per_week: i64,
+}
+
+impl Org {
+    pub fn default_daily_minutes(&self) -> i64 {
+        ((self.default_weekly_hours * 60.0) / self.default_workdays_per_week.max(1) as f64).round()
+            as i64
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,17 +64,8 @@ pub struct User {
     pub name: String,
     pub role: Role,
     pub locale: String,
-    /// Overrides the organisation default when set.
-    pub daily_target_minutes: Option<i64>,
     pub active: bool,
     pub created_at: Millis,
-}
-
-impl User {
-    pub fn target_minutes(&self, org: &Org) -> i64 {
-        self.daily_target_minutes
-            .unwrap_or(org.daily_target_minutes)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +76,6 @@ pub struct NewUser {
     pub password_hash: String,
     pub role: Role,
     pub locale: String,
-    pub daily_target_minutes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +83,8 @@ pub struct DayView {
     pub day: Workday,
     pub segments: Vec<Segment>,
     pub totals: Totals,
+    /// Target for this specific day, resolved from the contract valid then.
+    pub target_minutes: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +105,29 @@ pub struct TeamRow {
     pub org_name: String,
     pub period: Balance,
     pub total: Balance,
+    /// Contract in force today, if one exists.
+    pub current_model: Option<WorkTimeModel>,
+}
+
+/// An employee's contract period. Append-only: a change is a new row with a
+/// later `valid_from`, so historical balances never move.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkTimeModel {
+    pub id: String,
+    pub user_id: String,
+    pub valid_from: String,
+    pub weekly_hours: f64,
+    pub workdays_per_week: i64,
+    pub note: String,
+    pub created_at: Millis,
+}
+
+impl WorkTimeModel {
+    /// Contract hours spread over the contractual working days, rounded to
+    /// whole minutes so the books stay integral.
+    pub fn daily_target_minutes(&self) -> i64 {
+        ((self.weekly_hours * 60.0) / self.workdays_per_week.max(1) as f64).round() as i64
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,16 +256,26 @@ impl Store {
         name: &str,
         slug: &str,
         timezone: &str,
-        daily_target_minutes: i64,
+        default_weekly_hours: f64,
+        default_workdays_per_week: i64,
     ) -> Result<Org> {
         let id = now_id();
         let created = chrono_free_now();
         self.lock()
             .execute(
                 "INSERT INTO organizations
-                   (id, name, slug, color_primary, color_accent, timezone, daily_target_minutes, created_at)
-                 VALUES (?1, ?2, ?3, '#2a7647', '#e8f2e8', ?4, ?5, ?6)",
-                params![id, name, slug, timezone, daily_target_minutes, created],
+                   (id, name, slug, color_primary, color_accent, timezone,
+                    default_weekly_hours, default_workdays_per_week, created_at)
+                 VALUES (?1, ?2, ?3, '#2a7647', '#e8f2e8', ?4, ?5, ?6, ?7)",
+                params![
+                    id,
+                    name,
+                    slug,
+                    timezone,
+                    default_weekly_hours,
+                    default_workdays_per_week,
+                    created
+                ],
             )
             .map_err(|e| match e {
                 rusqlite::Error::SqliteFailure(err, _)
@@ -258,7 +292,7 @@ impl Store {
         let conn = self.lock();
         let row = conn
             .query_row(
-                "SELECT id, name, slug, logo_path, color_primary, color_accent, timezone, daily_target_minutes
+                "SELECT id, name, slug, logo_path, color_primary, color_accent, timezone, default_weekly_hours, default_workdays_per_week
                  FROM organizations WHERE id = ?1",
                 params![id],
                 map_org,
@@ -271,7 +305,7 @@ impl Store {
         let conn = self.lock();
         Ok(conn
             .query_row(
-                "SELECT id, name, slug, logo_path, color_primary, color_accent, timezone, daily_target_minutes
+                "SELECT id, name, slug, logo_path, color_primary, color_accent, timezone, default_weekly_hours, default_workdays_per_week
                  FROM organizations WHERE slug = ?1",
                 params![slug],
                 map_org,
@@ -282,7 +316,7 @@ impl Store {
     pub fn orgs(&self) -> Result<Vec<Org>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, name, slug, logo_path, color_primary, color_accent, timezone, daily_target_minutes
+            "SELECT id, name, slug, logo_path, color_primary, color_accent, timezone, default_weekly_hours, default_workdays_per_week
              FROM organizations ORDER BY name",
         )?;
         let rows = stmt.query_map([], map_org)?;
@@ -296,13 +330,15 @@ impl Store {
         color_primary: &str,
         color_accent: &str,
         timezone: &str,
-        daily_target_minutes: i64,
+        default_weekly_hours: f64,
+        default_workdays_per_week: i64,
         logo_path: Option<&str>,
     ) -> Result<Org> {
         self.lock().execute(
             "UPDATE organizations
                 SET name = ?2, color_primary = ?3, color_accent = ?4,
-                    timezone = ?5, daily_target_minutes = ?6, logo_path = ?7
+                    timezone = ?5, default_weekly_hours = ?6,
+                    default_workdays_per_week = ?7, logo_path = ?8
               WHERE id = ?1",
             params![
                 id,
@@ -310,7 +346,8 @@ impl Store {
                 color_primary,
                 color_accent,
                 timezone,
-                daily_target_minutes,
+                default_weekly_hours,
+                default_workdays_per_week,
                 logo_path
             ],
         )?;
@@ -322,30 +359,30 @@ impl Store {
     pub fn create_user(&self, u: &NewUser) -> Result<User> {
         let id = now_id();
         let created = chrono_free_now();
-        self.lock().execute(
-            "INSERT INTO users
-               (id, org_id, email, name, password_hash, role, locale, daily_target_minutes, active, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9)",
-            params![
-                id,
-                u.org_id,
-                u.email.to_lowercase(),
-                u.name,
-                u.password_hash,
-                role_str(u.role),
-                u.locale,
-                u.daily_target_minutes,
-                created
-            ],
-        )
-        .map_err(|e| match e {
-            rusqlite::Error::SqliteFailure(err, _)
-                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                StorageError::Conflict("email already exists".into())
-            }
-            other => StorageError::Sql(other),
-        })?;
+        self.lock()
+            .execute(
+                "INSERT INTO users
+               (id, org_id, email, name, password_hash, role, locale, active, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
+                params![
+                    id,
+                    u.org_id,
+                    u.email.to_lowercase(),
+                    u.name,
+                    u.password_hash,
+                    role_str(u.role),
+                    u.locale,
+                    created
+                ],
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::SqliteFailure(err, _)
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    StorageError::Conflict("email already exists".into())
+                }
+                other => StorageError::Sql(other),
+            })?;
         self.user(&id)?.ok_or(StorageError::NotFound)
     }
 
@@ -353,7 +390,7 @@ impl Store {
         let conn = self.lock();
         Ok(conn
             .query_row(
-                "SELECT id, org_id, email, name, role, locale, daily_target_minutes, active, created_at
+                "SELECT id, org_id, email, name, role, locale, active, created_at
                  FROM users WHERE id = ?1",
                 params![id],
                 map_user,
@@ -364,13 +401,13 @@ impl Store {
     pub fn user_by_email(&self, email: &str) -> Result<Option<(User, String)>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, org_id, email, name, role, locale, daily_target_minutes, active, created_at, password_hash
+            "SELECT id, org_id, email, name, role, locale, active, created_at, password_hash
              FROM users WHERE email = ?1 COLLATE NOCASE",
         )?;
         let mut rows = stmt.query(params![email])?;
         if let Some(row) = rows.next()? {
             let user = map_user(row)?;
-            let hash: String = row.get(9)?;
+            let hash: String = row.get(8)?;
             Ok(Some((user, hash)))
         } else {
             Ok(None)
@@ -380,7 +417,7 @@ impl Store {
     pub fn users_of_org(&self, org_id: &str) -> Result<Vec<User>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, org_id, email, name, role, locale, daily_target_minutes, active, created_at
+            "SELECT id, org_id, email, name, role, locale, active, created_at
              FROM users WHERE org_id = ?1 ORDER BY name COLLATE NOCASE",
         )?;
         let rows = stmt.query_map(params![org_id], map_user)?;
@@ -390,7 +427,7 @@ impl Store {
     pub fn all_users(&self) -> Result<Vec<User>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, org_id, email, name, role, locale, daily_target_minutes, active, created_at
+            "SELECT id, org_id, email, name, role, locale, active, created_at
              FROM users ORDER BY name COLLATE NOCASE",
         )?;
         let rows = stmt.query_map([], map_user)?;
@@ -403,20 +440,11 @@ impl Store {
         name: &str,
         role: Role,
         locale: &str,
-        daily_target_minutes: Option<i64>,
         active: bool,
     ) -> Result<User> {
         self.lock().execute(
-            "UPDATE users SET name = ?2, role = ?3, locale = ?4,
-                    daily_target_minutes = ?5, active = ?6 WHERE id = ?1",
-            params![
-                id,
-                name,
-                role_str(role),
-                locale,
-                daily_target_minutes,
-                i64::from(active)
-            ],
+            "UPDATE users SET name = ?2, role = ?3, locale = ?4, active = ?5 WHERE id = ?1",
+            params![id, name, role_str(role), locale, i64::from(active)],
         )?;
         self.user(id)?.ok_or(StorageError::NotFound)
     }
@@ -511,7 +539,7 @@ impl Store {
         let user: Option<User> = conn
             .query_row(
                 "SELECT u.id, u.org_id, u.email, u.name, u.role, u.locale,
-                        u.daily_target_minutes, u.active, u.created_at
+                        u.active, u.created_at
                    FROM sessions s JOIN users u ON u.id = s.user_id
                   WHERE s.token_hash = ?1 AND u.active = 1",
                 params![token_hash],
@@ -871,11 +899,16 @@ impl Store {
         let snap = self.snapshot(&user.id, &user.org_id, &effective)?;
         let totals = dw_core::totals(&snap.segments, &snap.accounts, now);
         let day = snap.day.ok_or(StorageError::NotFound)?;
+        let target_minutes = {
+            let conn = self.lock();
+            Self::target_minutes_at(&conn, &user.id, &day.date)?
+        };
         Ok((
             DayView {
                 day,
                 segments: snap.segments,
                 totals,
+                target_minutes,
             },
             plan.outcome,
         ))
@@ -911,10 +944,12 @@ impl Store {
                 .query_map(params![day.id], map_segment)?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             let totals = dw_core::totals(&segments, &accounts, now);
+            let target_minutes = Self::target_minutes_at(&conn, user_id, &day.date)?;
             out.push(DayView {
                 day,
                 segments,
                 totals,
+                target_minutes,
             });
         }
         Ok(out)
@@ -1019,6 +1054,154 @@ impl Store {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    // ---- working time models -------------------------------------------
+
+    pub fn work_time_models(&self, user_id: &str) -> Result<Vec<WorkTimeModel>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, valid_from, weekly_hours, workdays_per_week, note, created_at
+               FROM work_time_models WHERE user_id = ?1 ORDER BY valid_from",
+        )?;
+        let rows = stmt.query_map(params![user_id], map_model)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    fn model_at_conn(
+        conn: &Connection,
+        user_id: &str,
+        date: &str,
+    ) -> Result<Option<WorkTimeModel>> {
+        Ok(conn
+            .query_row(
+                "SELECT id, user_id, valid_from, weekly_hours, workdays_per_week, note, created_at
+                   FROM work_time_models
+                  WHERE user_id = ?1 AND valid_from <= ?2
+                  ORDER BY valid_from DESC LIMIT 1",
+                params![user_id, date],
+                map_model,
+            )
+            .optional()?)
+    }
+
+    /// The contract in force on `date`.
+    pub fn work_time_model_at(&self, user_id: &str, date: &str) -> Result<Option<WorkTimeModel>> {
+        let conn = self.lock();
+        Self::model_at_conn(&conn, user_id, date)
+    }
+
+    /// Daily target for a date, falling back to the organisation default when
+    /// no contract has been recorded.
+    fn target_minutes_at(conn: &Connection, user_id: &str, date: &str) -> Result<i64> {
+        if let Some(model) = Self::model_at_conn(conn, user_id, date)? {
+            return Ok(model.daily_target_minutes());
+        }
+        let (hours, days): (f64, i64) = conn.query_row(
+            "SELECT o.default_weekly_hours, o.default_workdays_per_week
+               FROM users u JOIN organizations o ON o.id = u.org_id
+              WHERE u.id = ?1",
+            params![user_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(((hours * 60.0) / days.max(1) as f64).round() as i64)
+    }
+
+    pub fn add_work_time_model(
+        &self,
+        user_id: &str,
+        valid_from: &str,
+        weekly_hours: f64,
+        workdays_per_week: i64,
+        note: &str,
+        created_by: &str,
+        at: Millis,
+    ) -> Result<WorkTimeModel> {
+        if !(weekly_hours > 0.0 && weekly_hours <= 80.0) {
+            return Err(StorageError::Conflict(
+                "weekly hours must be greater than 0 and at most 80".into(),
+            ));
+        }
+        if !(1..=7).contains(&workdays_per_week) {
+            return Err(StorageError::Conflict(
+                "workdays per week must be between 1 and 7".into(),
+            ));
+        }
+        if self.user(user_id)?.is_none() {
+            return Err(StorageError::NotFound);
+        }
+
+        let id = now_id();
+        self.lock()
+            .execute(
+                "INSERT INTO work_time_models
+                   (id, user_id, valid_from, weekly_hours, workdays_per_week, note, created_by, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    id,
+                    user_id,
+                    valid_from,
+                    weekly_hours,
+                    workdays_per_week,
+                    note.trim(),
+                    created_by,
+                    at
+                ],
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::SqliteFailure(err, _)
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    StorageError::Conflict("a model already starts on that date".into())
+                }
+                other => StorageError::Sql(other),
+            })?;
+
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT id, user_id, valid_from, weekly_hours, workdays_per_week, note, created_at
+               FROM work_time_models WHERE id = ?1",
+            params![id],
+            map_model,
+        )
+        .map_err(StorageError::Sql)
+    }
+
+    /// Correct a model in place. Meant for typos; changing history is audited by
+    /// the caller.
+    pub fn update_work_time_model(
+        &self,
+        id: &str,
+        weekly_hours: f64,
+        workdays_per_week: i64,
+        note: &str,
+    ) -> Result<WorkTimeModel> {
+        if !(weekly_hours > 0.0 && weekly_hours <= 80.0) {
+            return Err(StorageError::Conflict(
+                "weekly hours must be greater than 0 and at most 80".into(),
+            ));
+        }
+        if !(1..=7).contains(&workdays_per_week) {
+            return Err(StorageError::Conflict(
+                "workdays per week must be between 1 and 7".into(),
+            ));
+        }
+        let changed = self.lock().execute(
+            "UPDATE work_time_models SET weekly_hours = ?2, workdays_per_week = ?3, note = ?4
+              WHERE id = ?1",
+            params![id, weekly_hours, workdays_per_week, note.trim()],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::NotFound);
+        }
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT id, user_id, valid_from, weekly_hours, workdays_per_week, note, created_at
+               FROM work_time_models WHERE id = ?1",
+            params![id],
+            map_model,
+        )
+        .map_err(StorageError::Sql)
+    }
+
     // ---- balances and statistics ---------------------------------------
 
     fn segments_in_range(
@@ -1064,21 +1247,29 @@ impl Store {
             }
         }
 
-        let days: i64 = conn.query_row(
-            "SELECT COUNT(DISTINCT w.date)
-               FROM workdays w
-               JOIN segments s ON s.workday_id = w.id
-              WHERE w.user_id = ?1 AND w.date BETWEEN ?2 AND ?3",
-            params![user_id, from, to],
-            |r| r.get(0),
-        )?;
+        // Days that actually have entries, and the target that applied on each
+        // of them. A contract change mid-period therefore only affects the
+        // days it covers.
+        let dates: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT w.date
+                   FROM workdays w
+                   JOIN segments s ON s.workday_id = w.id
+                  WHERE w.user_id = ?1 AND w.date BETWEEN ?2 AND ?3
+                  ORDER BY w.date",
+            )?;
+            stmt.query_map(params![user_id, from, to], |r| r.get(0))?
+                .collect::<std::result::Result<Vec<String>, _>>()?
+        };
 
-        let target_minutes: i64 = conn.query_row(
-            "SELECT COALESCE(u.daily_target_minutes, o.daily_target_minutes)
-               FROM users u JOIN organizations o ON o.id = u.org_id WHERE u.id = ?1",
-            params![user_id],
-            |r| r.get(0),
-        )?;
+        let mut target_minutes_sum: i64 = 0;
+        for date in &dates {
+            target_minutes_sum += Self::target_minutes_at(conn, user_id, date)?;
+        }
+        let days = dates.len() as i64;
+
+        // The daily target in force at the end of the range, for display.
+        let target_minutes = Self::target_minutes_at(conn, user_id, to)?;
 
         let adjustments_ms: i64 = conn.query_row(
             "SELECT COALESCE(SUM(minutes), 0) * 60000 FROM balance_adjustments
@@ -1087,7 +1278,7 @@ impl Store {
             |r| r.get(0),
         )?;
 
-        let target_ms = target_minutes * 60_000 * days;
+        let target_ms = target_minutes_sum * 60_000;
         Ok(Balance {
             worked_ms: worked,
             break_ms: brk,
@@ -1173,11 +1364,11 @@ impl Store {
         let conn = self.lock();
         let mut stmt = match org_id {
             Some(_) => conn.prepare(
-                "SELECT id, org_id, email, name, role, locale, daily_target_minutes, active, created_at
+                "SELECT id, org_id, email, name, role, locale, active, created_at
                    FROM users WHERE org_id = ?1 ORDER BY active DESC, name COLLATE NOCASE",
             )?,
             None => conn.prepare(
-                "SELECT id, org_id, email, name, role, locale, daily_target_minutes, active, created_at
+                "SELECT id, org_id, email, name, role, locale, active, created_at
                    FROM users WHERE 1 = 1 ORDER BY active DESC, name COLLATE NOCASE",
             )?,
         };
@@ -1196,12 +1387,14 @@ impl Store {
             let org = orgs.iter().find(|o| o.id == user.org_id);
             let period = self.balance_in_range(&conn, &user.id, from, to, now)?;
             let total = self.balance_in_range(&conn, &user.id, EPOCH_DATE, to, now)?;
+            let current_model = Self::model_at_conn(&conn, &user.id, to)?;
             out.push(TeamRow {
                 org_id: user.org_id.clone(),
                 org_name: org.map(|o| o.name.clone()).unwrap_or_default(),
                 user,
                 period,
                 total,
+                current_model,
             });
         }
         Ok(out)
@@ -1275,7 +1468,8 @@ impl Store {
                     "color_primary",
                     "color_accent",
                     "timezone",
-                    "daily_target_minutes",
+                    "default_weekly_hours",
+                    "default_workdays_per_week",
                     "created_at",
                 ],
             )?,
@@ -1293,7 +1487,6 @@ impl Store {
                     "password_hash",
                     "role",
                     "locale",
-                    "daily_target_minutes",
                     "active",
                     "created_at",
                 ],
@@ -1354,6 +1547,23 @@ impl Store {
             )?,
         );
         out.insert(
+            "work_time_models".into(),
+            dump(
+                &conn,
+                "work_time_models",
+                &[
+                    "id",
+                    "user_id",
+                    "valid_from",
+                    "weekly_hours",
+                    "workdays_per_week",
+                    "note",
+                    "created_by",
+                    "created_at",
+                ],
+            )?,
+        );
+        out.insert(
             "balance_adjustments".into(),
             dump(
                 &conn,
@@ -1403,6 +1613,7 @@ impl Store {
         let tx = conn.transaction()?;
         tx.execute_batch(
             "DELETE FROM audit_log;
+             DELETE FROM work_time_models;
              DELETE FROM balance_adjustments;
              DELETE FROM segments;
              DELETE FROM workdays;
@@ -1414,7 +1625,7 @@ impl Store {
         )?;
 
         let mut counts = serde_json::Map::new();
-        let tables: [(&str, &[&str]); 7] = [
+        let tables: [(&str, &[&str]); 8] = [
             (
                 "organizations",
                 &[
@@ -1425,7 +1636,8 @@ impl Store {
                     "color_primary",
                     "color_accent",
                     "timezone",
-                    "daily_target_minutes",
+                    "default_weekly_hours",
+                    "default_workdays_per_week",
                     "created_at",
                 ],
             ),
@@ -1439,7 +1651,6 @@ impl Store {
                     "password_hash",
                     "role",
                     "locale",
-                    "daily_target_minutes",
                     "active",
                     "created_at",
                 ],
@@ -1484,6 +1695,19 @@ impl Store {
                     "material",
                     "edited_by",
                     "edited_at",
+                ],
+            ),
+            (
+                "work_time_models",
+                &[
+                    "id",
+                    "user_id",
+                    "valid_from",
+                    "weekly_hours",
+                    "workdays_per_week",
+                    "note",
+                    "created_by",
+                    "created_at",
                 ],
             ),
             (
@@ -1562,7 +1786,8 @@ fn map_org(row: &Row<'_>) -> rusqlite::Result<Org> {
         color_primary: row.get(4)?,
         color_accent: row.get(5)?,
         timezone: row.get(6)?,
-        daily_target_minutes: row.get(7)?,
+        default_weekly_hours: row.get(7)?,
+        default_workdays_per_week: row.get(8)?,
     })
 }
 
@@ -1575,9 +1800,8 @@ fn map_user(row: &Row<'_>) -> rusqlite::Result<User> {
         name: row.get(3)?,
         role: role_from(&role),
         locale: row.get(5)?,
-        daily_target_minutes: row.get(6)?,
-        active: row.get::<_, i64>(7)? != 0,
-        created_at: row.get(8)?,
+        active: row.get::<_, i64>(6)? != 0,
+        created_at: row.get(7)?,
     })
 }
 
@@ -1592,6 +1816,18 @@ fn map_account(row: &Row<'_>) -> rusqlite::Result<Account> {
         sort_order: row.get(5)?,
         archived: row.get::<_, i64>(6)? != 0,
         is_primary: row.get::<_, i64>(7)? != 0,
+    })
+}
+
+fn map_model(row: &Row<'_>) -> rusqlite::Result<WorkTimeModel> {
+    Ok(WorkTimeModel {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        valid_from: row.get(2)?,
+        weekly_hours: row.get(3)?,
+        workdays_per_week: row.get(4)?,
+        note: row.get(5)?,
+        created_at: row.get(6)?,
     })
 }
 
@@ -1848,6 +2084,36 @@ CREATE UNIQUE INDEX account_name_unique
     ON accounts(org_id, name COLLATE NOCASE) WHERE archived = 0;
 "#;
 
+const MIGRATION_V3: &str = r#"ALTER TABLE organizations ADD COLUMN default_weekly_hours REAL NOT NULL DEFAULT 40;
+ALTER TABLE organizations ADD COLUMN default_workdays_per_week INTEGER NOT NULL DEFAULT 5;
+UPDATE organizations
+   SET default_weekly_hours = daily_target_minutes * 5.0 / 60.0;
+
+CREATE TABLE work_time_models (
+    id                TEXT PRIMARY KEY,
+    user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    valid_from        TEXT NOT NULL,
+    weekly_hours      REAL NOT NULL,
+    workdays_per_week INTEGER NOT NULL,
+    note              TEXT NOT NULL DEFAULT '',
+    created_by        TEXT,
+    created_at        INTEGER NOT NULL,
+    UNIQUE (user_id, valid_from),
+    CHECK (weekly_hours > 0 AND weekly_hours <= 80),
+    CHECK (workdays_per_week BETWEEN 1 AND 7)
+);
+CREATE INDEX idx_wtm_user_date ON work_time_models(user_id, valid_from);
+
+INSERT INTO work_time_models
+    (id, user_id, valid_from, weekly_hours, workdays_per_week, note, created_at)
+SELECT lower(hex(randomblob(16))), u.id, '1970-01-01',
+       COALESCE(u.daily_target_minutes * 5.0 / 60.0, o.default_weekly_hours),
+       5, 'Migration', 0
+  FROM users u JOIN organizations o ON o.id = u.org_id;
+
+ALTER TABLE users DROP COLUMN daily_target_minutes;
+ALTER TABLE organizations DROP COLUMN daily_target_minutes;"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1859,7 +2125,7 @@ mod tests {
     fn store() -> (Store, Org, User) {
         let store = Store::in_memory().unwrap();
         let org = store
-            .create_org("Test GmbH", "test", "Europe/Berlin", 480)
+            .create_org("Test GmbH", "test", "Europe/Berlin", 40.0, 5)
             .unwrap();
         store.ensure_default_accounts(&org.id).unwrap();
         let user = store
@@ -1870,7 +2136,6 @@ mod tests {
                 password_hash: "x".into(),
                 role: Role::Employee,
                 locale: "de".into(),
-                daily_target_minutes: None,
             })
             .unwrap();
         (store, org, user)
@@ -2077,12 +2342,12 @@ mod tests {
     }
 
     #[test]
-    fn per_user_target_overrides_org_default() {
-        let (store, org, mut user) = store();
-        user.daily_target_minutes = Some(600);
+    fn a_contract_model_overrides_the_organisation_default() {
+        let (store, org, user) = store();
         store
-            .update_user(&user.id, &user.name, user.role, "de", Some(600), true)
+            .add_work_time_model(&user.id, "1970-01-01", 30.0, 5, "Teilzeit", &user.id, NOW)
             .unwrap();
+
         let accounts = store.accounts(&org.id, false).unwrap();
         let work = accounts
             .iter()
@@ -2102,16 +2367,116 @@ mod tests {
         store
             .punch(&user, &Action::Stop, NOW + 3_600_000, DATE, "test")
             .unwrap();
+
         let b = store.balance(&user.id, DATE, DATE, NOW).unwrap();
-        assert_eq!(b.target_minutes, 600);
-        assert_eq!(b.balance_ms, (60 - 600) * 60_000);
+        assert_eq!(b.target_minutes, 360, "30 h / 5 days = 6 h");
+        assert_eq!(b.balance_ms, (60 - 360) * 60_000);
+    }
+
+    #[test]
+    fn a_contract_change_only_affects_days_it_covers() {
+        let (store, org, user) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let work = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Work)
+            .unwrap();
+
+        // 40 h/week from the start, then 30 h/week from the middle of the month
+        store
+            .add_work_time_model(&user.id, "2026-10-01", 40.0, 5, "", &user.id, NOW)
+            .unwrap();
+        store
+            .add_work_time_model(&user.id, "2026-10-16", 30.0, 5, "", &user.id, NOW)
+            .unwrap();
+
+        for date in ["2026-10-02", "2026-10-20"] {
+            store
+                .punch(
+                    &user,
+                    &Action::Start {
+                        account_id: work.id.clone(),
+                    },
+                    NOW,
+                    date,
+                    "test",
+                )
+                .unwrap();
+            store
+                .punch(&user, &Action::Stop, NOW + 60_000, date, "test")
+                .unwrap();
+        }
+
+        let b = store
+            .balance(&user.id, "2026-10-01", "2026-10-31", NOW)
+            .unwrap();
+        assert_eq!(b.days, 2);
+        // 480 (40 h) + 360 (30 h) minutes of target
+        assert_eq!(b.target_ms, (480 + 360) * 60_000);
+        assert_eq!(b.target_minutes, 360, "display target is the current one");
+
+        let days = store
+            .days_between(&user.id, &org.id, "2026-10-01", "2026-10-31", NOW)
+            .unwrap();
+        let by_date: std::collections::HashMap<_, _> = days
+            .iter()
+            .map(|d| (d.day.date.as_str(), d.target_minutes))
+            .collect();
+        assert_eq!(by_date.get("2026-10-02"), Some(&480));
+        assert_eq!(by_date.get("2026-10-20"), Some(&360));
+    }
+
+    #[test]
+    fn contract_models_are_append_only_and_validated() {
+        let (store, _org, user) = store();
+        let first = store
+            .add_work_time_model(&user.id, "2026-01-01", 40.0, 5, "", &user.id, NOW)
+            .unwrap();
+        assert_eq!(first.daily_target_minutes(), 480);
+
+        let second = store
+            .add_work_time_model(&user.id, "2026-07-01", 30.0, 5, "", &user.id, NOW)
+            .unwrap();
+        assert_eq!(store.work_time_models(&user.id).unwrap().len(), 2);
+
+        // the old period still resolves to the old contract
+        let before = store
+            .work_time_model_at(&user.id, "2026-03-15")
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.id, first.id);
+        let after = store
+            .work_time_model_at(&user.id, "2026-07-02")
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.id, second.id);
+
+        // duplicate valid_from, bad hours, bad days
+        assert!(matches!(
+            store.add_work_time_model(&user.id, "2026-07-01", 20.0, 5, "", &user.id, NOW),
+            Err(StorageError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.add_work_time_model(&user.id, "2027-01-01", 0.0, 5, "", &user.id, NOW),
+            Err(StorageError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.add_work_time_model(&user.id, "2027-01-01", 40.0, 8, "", &user.id, NOW),
+            Err(StorageError::Conflict(_))
+        ));
+
+        // fractional contracts round to whole minutes
+        let thirty_seven = store
+            .add_work_time_model(&user.id, "2027-01-01", 37.5, 5, "", &user.id, NOW)
+            .unwrap();
+        assert_eq!(thirty_seven.daily_target_minutes(), 450);
     }
 
     #[test]
     fn team_lists_balances_per_org() {
         let (store, org, user) = store();
         let other = store
-            .create_org("Other", "other", "Europe/Berlin", 480)
+            .create_org("Other", "other", "Europe/Berlin", 40.0, 5)
             .unwrap();
         store.ensure_default_accounts(&other.id).unwrap();
         let user2 = store
@@ -2122,7 +2487,6 @@ mod tests {
                 password_hash: "x".into(),
                 role: Role::Employee,
                 locale: "en".into(),
-                daily_target_minutes: None,
             })
             .unwrap();
 
@@ -2403,7 +2767,6 @@ mod tests {
                 password_hash: "x".into(),
                 role,
                 locale: "de".into(),
-                daily_target_minutes: None,
             })
             .unwrap()
     }
@@ -2485,7 +2848,7 @@ mod tests {
             .unwrap();
 
         store
-            .update_user(&user.id, &user.name, user.role, "de", None, false)
+            .update_user(&user.id, &user.name, user.role, "de", false)
             .unwrap();
 
         // still listed in the team report with the balance intact
@@ -2605,7 +2968,7 @@ mod tests {
 
         let (store, org, user) = store();
         let other = store
-            .create_org("Other", "other", "Europe/Berlin", 480)
+            .create_org("Other", "other", "Europe/Berlin", 40.0, 5)
             .unwrap();
         store.ensure_default_accounts(&other.id).unwrap();
         let other_user = store
@@ -2616,7 +2979,6 @@ mod tests {
                 password_hash: "x".into(),
                 role: Role::Employee,
                 locale: "de".into(),
-                daily_target_minutes: None,
             })
             .unwrap();
 
@@ -2698,7 +3060,7 @@ mod tests {
         }
 
         let store = Store::open(path.to_str().unwrap()).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 2);
+        assert_eq!(store.schema_version().unwrap(), 3);
         assert_eq!(store.orgs().unwrap().len(), 1, "existing data survives");
 
         // the new columns and the new index are usable
@@ -2719,7 +3081,57 @@ mod tests {
             )
             .unwrap();
         assert_eq!(idx, 1);
+        let wtm: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='work_time_models'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(wtm, 1);
         drop(conn);
+        drop(store);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn migration_backfills_contracts_from_the_old_daily_target() {
+        let path = std::env::temp_dir().join(format!("daywerk-mig3-{}.db", uuid::Uuid::new_v4()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.execute_batch(MIGRATION_V2).unwrap();
+            conn.pragma_update(None, "user_version", 2).unwrap();
+            conn.execute(
+                "INSERT INTO organizations (id, name, slug, daily_target_minutes, created_at)
+                 VALUES ('o1', 'Old', 'old', 480, 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO users (id, org_id, email, name, password_hash, role, locale,
+                                    daily_target_minutes, active, created_at)
+                 VALUES ('u1', 'o1', 'old@example.org', 'Old', 'x', 'employee', 'de', 600, 1, 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 3);
+
+        // the per-user 600 min/day (50 h/week) survives as a contract
+        let models = store.work_time_models("u1").unwrap();
+        assert_eq!(models.len(), 1);
+        assert!((models[0].weekly_hours - 50.0).abs() < 0.001);
+        assert_eq!(models[0].workdays_per_week, 5);
+        assert_eq!(models[0].daily_target_minutes(), 600);
+
+        // the organisation default (480 min/day) became 40 h/week
+        let org = store.org("o1").unwrap().unwrap();
+        assert!((org.default_weekly_hours - 40.0).abs() < 0.001);
+        assert_eq!(org.default_daily_minutes(), 480);
+
         drop(store);
         std::fs::remove_file(&path).ok();
     }
@@ -2734,7 +3146,6 @@ mod tests {
             password_hash: "x".into(),
             role: Role::Employee,
             locale: "de".into(),
-            daily_target_minutes: None,
         });
         assert!(matches!(err, Err(StorageError::Conflict(_))));
     }

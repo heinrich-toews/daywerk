@@ -41,7 +41,7 @@ export default function History() {
   });
 
   const accountName = (id: string) => me()?.accounts.find((a) => a.id === id)?.name ?? "—";
-  const target = () => (me()?.target_minutes ?? 0) * 60_000;
+  const targetOf = (entry: DayViewData) => entry.target_minutes * 60_000;
 
   const canEdit = (segment: Segment, date: string) => {
     const user = me()?.user;
@@ -116,11 +116,12 @@ export default function History() {
                       <span class="chip">{dur(entry.totals.work_ms)}</span>
                       <span
                         class={`text-xs font-semibold ${balanceClass(
-                          entry.totals.work_ms - (entry.segments.length > 0 ? target() : 0),
+                          entry.totals.work_ms -
+                            (entry.segments.length > 0 ? targetOf(entry) : 0),
                         )}`}
                       >
                         {entry.segments.length > 0
-                          ? dur(entry.totals.work_ms - target())
+                          ? dur(entry.totals.work_ms - targetOf(entry))
                           : t("common.none")}
                       </span>
                       <Show when={entry.day.status === "closed"}>

@@ -148,10 +148,13 @@ export default function Team() {
                     </div>
                     <div class="truncate text-xs text-muted">
                       {row.org_name}
-                      <Show when={row.user.daily_target_minutes !== null}>
-                        <span class="ml-2">
-                          {t("admin.targetUser")}: {row.user.daily_target_minutes}
-                        </span>
+                      <Show when={row.current_model}>
+                        {(model) => (
+                          <span class="ml-2">
+                            {model().weekly_hours} h · {model().workdays_per_week}{" "}
+                            {t("model.daysShort")}
+                          </span>
+                        )}
                       </Show>
                     </div>
                   </div>

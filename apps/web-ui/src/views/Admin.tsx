@@ -8,19 +8,19 @@ import {
   type Role,
   type User,
 } from "../api";
+import { dur } from "../format";
 import { t } from "../i18n";
 import { me, refresh, signOut } from "../state";
+import WorkTimeModelSheet from "../components/WorkTimeModelSheet";
 
 function UserRow(props: {
   user: User;
   orgs: Org[];
   onSaved: (user: User) => void;
   onDeleted: (id: string) => void;
+  onModels: (user: User) => void;
 }) {
   const [role, setRole] = createSignal<Role>(props.user.role);
-  const [target, setTarget] = createSignal(
-    props.user.daily_target_minutes ? String(props.user.daily_target_minutes) : "",
-  );
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -35,10 +35,7 @@ function UserRow(props: {
     setBusy(true);
     setError(null);
     try {
-      const updated = await api.updateUser(props.user.id, {
-        role: role(),
-        daily_target_minutes: target() === "" ? 0 : Number(target()),
-      });
+      const updated = await api.updateUser(props.user.id, { role: role() });
       props.onSaved(updated);
     } catch (err) {
       setError(describe(err));
@@ -104,15 +101,13 @@ function UserRow(props: {
         <option value="admin">{t("admin.role.admin")}</option>
       </select>
 
-      <input
-        class="w-20 rounded-lg border border-line bg-card px-2 py-1.5 text-sm tabular-nums"
-        type="number"
-        min="0"
-        step="15"
-        placeholder={t("admin.targetUser")}
-        value={target()}
-        onInput={(e) => setTarget(e.currentTarget.value)}
-      />
+      <button
+        type="button"
+        class="btn-ghost px-3 py-1.5 text-sm"
+        onClick={() => props.onModels(props.user)}
+      >
+        {t("model.open")}
+      </button>
 
       <button type="button" class="btn-ghost px-3 py-1.5 text-sm" disabled={busy()} onClick={() => void save()}>
         {t("settings.save")}
@@ -151,7 +146,8 @@ export default function Admin() {
   const [colorPrimary, setColorPrimary] = createSignal(org().color_primary);
   const [colorAccent, setColorAccent] = createSignal(org().color_accent);
   const [timezone, setTimezone] = createSignal(org().timezone);
-  const [target, setTarget] = createSignal(String(org().daily_target_minutes));
+  const [weeklyHours, setWeeklyHours] = createSignal(String(org().default_weekly_hours));
+  const [workdays, setWorkdays] = createSignal(String(org().default_workdays_per_week));
   const [orgNotice, setOrgNotice] = createSignal<string | null>(null);
   const [editOrgId, setEditOrgId] = createSignal(org().id);
   const [newOrgName, setNewOrgName] = createSignal("");
@@ -170,6 +166,7 @@ export default function Admin() {
   const [newRole, setNewRole] = createSignal<Role>("employee");
   const [newOrgId, setNewOrgId] = createSignal("");
   const [userError, setUserError] = createSignal<string | null>(null);
+  const [modelUser, setModelUser] = createSignal<User | null>(null);
   const [importNotice, setImportNotice] = createSignal<string | null>(null);
 
   async function loadAccounts() {
@@ -209,7 +206,8 @@ export default function Admin() {
     setColorPrimary(found.color_primary);
     setColorAccent(found.color_accent);
     setTimezone(found.timezone);
-    setTarget(String(found.daily_target_minutes));
+    setWeeklyHours(String(found.default_weekly_hours));
+    setWorkdays(String(found.default_workdays_per_week));
   }
 
   async function saveOrg(e: Event) {
@@ -220,7 +218,8 @@ export default function Admin() {
         color_primary: colorPrimary(),
         color_accent: colorAccent(),
         timezone: timezone(),
-        daily_target_minutes: Number(target()),
+        default_weekly_hours: Number(weeklyHours().replace(",", ".")),
+        default_workdays_per_week: Number(workdays()),
       });
       if (editOrgId() === org().id) await refresh();
       setOrgs(await api.orgs());
@@ -401,19 +400,46 @@ export default function Admin() {
             />
           </div>
           <div>
-            <label class="label" for="org-target">
-              {t("admin.target")}
+            <label class="label" for="org-hours">
+              {t("model.weeklyHours")}
             </label>
             <input
-              id="org-target"
+              id="org-hours"
               type="number"
-              min="0"
-              step="15"
+              min="0.25"
+              max="80"
+              step="0.25"
               class="field"
-              value={target()}
-              onInput={(e) => setTarget(e.currentTarget.value)}
+              value={weeklyHours()}
+              onInput={(e) => setWeeklyHours(e.currentTarget.value)}
             />
           </div>
+          <div>
+            <label class="label" for="org-days">
+              {t("model.workdays")}
+            </label>
+            <input
+              id="org-days"
+              type="number"
+              min="1"
+              max="7"
+              step="1"
+              class="field"
+              value={workdays()}
+              onInput={(e) => setWorkdays(e.currentTarget.value)}
+            />
+          </div>
+          <p class="text-xs text-muted">
+            {t("model.daily")}:{" "}
+            <b class="text-foreground tabular-nums">
+              {dur(
+                Math.round(
+                  (Number(weeklyHours().replace(",", ".")) * 60) /
+                    Math.max(1, Number(workdays())),
+                ) * 60_000,
+              )}
+            </b>
+          </p>
         </div>
         <Show when={orgNotice()}>
           {(message) => <p class="text-sm font-medium text-ok">{message()}</p>}
@@ -536,6 +562,7 @@ export default function Admin() {
                   setUsers((list) => list.map((u) => (u.id === updated.id ? updated : u)))
                 }
                 onDeleted={(id) => setUsers((list) => list.filter((u) => u.id !== id))}
+                onModels={setModelUser}
               />
             )}
           </For>
@@ -597,6 +624,10 @@ export default function Admin() {
           </button>
         </form>
       </section>
+
+      <Show when={modelUser()} keyed>
+        {(user) => <WorkTimeModelSheet user={user} onClose={() => setModelUser(null)} />}
+      </Show>
 
       <section class="card space-y-3 p-4">
         <h2 class="font-display text-lg font-bold uppercase">{t("settings.backup")}</h2>

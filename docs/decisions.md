@@ -77,3 +77,27 @@ requires `active = 1`) but stays in the team report and in exports, so their
 hours and balance remain readable. Employees without any entries are deleted
 for real, and the last active administrator is protected from both deletion and
 deactivation.
+
+## Working time models
+
+Contracts are expressed in **hours per week**, not minutes per day. Each employee
+has an append-only list of `work_time_models` rows (`valid_from`, `weekly_hours`,
+`workdays_per_week`). The daily target is derived:
+
+```
+daily_target_minutes = round(weekly_hours * 60 / workdays_per_week)
+```
+
+Why append-only instead of a `users.weekly_hours` column: a contract change must
+not rewrite history. The model in force on a day is the newest row starting on or
+before that day, so a change from 40 h to 30 h on 1 November leaves every October
+balance untouched. There is no `valid_to` column — validity ends where the next
+row begins, which makes gaps and overlaps structurally impossible.
+
+Balance is therefore computed per day, not per period. Only days with entries
+count (a holiday week neither adds nor subtracts), and manual
+`balance_adjustments` still apply on top.
+
+Retroactive `valid_from` dates are allowed (contract corrections) and audited;
+they intentionally recalculate the past. Editing an existing row is reserved for
+typos.

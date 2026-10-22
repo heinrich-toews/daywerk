@@ -264,10 +264,63 @@ def main() -> int:
     status, ctype, body = fetch_raw("/api/export/timesheet.xlsx", admin_token)
     check(status == 200 and body[:2] == b"PK", f"admin downloads xlsx ({status})")
 
-    # ---- employee deletion ----------------------------------------------
+    # ---- working time models --------------------------------------------
     worker_id = call("/api/me", worker_token)[1]["user"]["id"]
     admin_id = admin["user"]["id"]
 
+    status, models = call(f"/api/users/{worker_id}/work-time-models", admin_token)
+    check(
+        status == 200 and len(models) == 1,
+        f"new employee gets an initial contract ({status})",
+    )
+
+    status, _ = call(f"/api/users/{worker_id}/work-time-models", worker_token)
+    check(status == 200, f"employee reads own contract history ({status})")
+
+    status, _ = call(f"/api/users/{worker_id}/work-time-models", tokens["other@test.local"])
+    check(status == 403, f"foreign employee cannot read it ({status})")
+
+    status, model = call(
+        f"/api/users/{worker_id}/work-time-models", admin_token, "POST",
+        {"valid_from": "2026-01-01", "weekly_hours": 35, "workdays_per_week": 5},
+    )
+    check(
+        status == 200 and abs(model["weekly_hours"] - 35.0) < 0.001,
+        f"admin adds a 35 h contract ({status})",
+    )
+
+    status, _ = call(
+        f"/api/users/{worker_id}/work-time-models", admin_token, "POST",
+        {"valid_from": "2026-01-01", "weekly_hours": 20, "workdays_per_week": 5},
+    )
+    check(status == 409, f"duplicate valid_from rejected ({status})")
+
+    status, _ = call(
+        f"/api/users/{worker_id}/work-time-models", admin_token, "POST",
+        {"valid_from": "2026-02-01", "weekly_hours": 0, "workdays_per_week": 5},
+    )
+    check(status == 409, f"zero weekly hours rejected ({status})")
+
+    status, _ = call(
+        f"/api/users/{worker_id}/work-time-models", admin_token, "POST",
+        {"valid_from": "2026-02-01", "weekly_hours": 40, "workdays_per_week": 8},
+    )
+    check(status == 409, f"eight workdays rejected ({status})")
+
+    status, _ = call(
+        f"/api/users/{worker_id}/work-time-models", worker_token, "POST",
+        {"valid_from": "2026-03-01", "weekly_hours": 40, "workdays_per_week": 5},
+    )
+    check(status == 403, f"employee cannot change the contract ({status})")
+
+    # 35 h / 5 days = 7 h per day, effective for the recorded day
+    status, me = call("/api/me", worker_token)
+    check(
+        status == 200 and me["target_minutes"] == 420,
+        f"balance uses the contract ({me.get('target_minutes')} min)",
+    )
+
+    # ---- employee deletion ----------------------------------------------
     status, temp_user = call(
         "/api/users", admin_token, "POST",
         {"email": "temp@test.local", "name": "Temp", "password": "test1234",

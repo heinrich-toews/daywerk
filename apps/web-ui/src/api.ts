@@ -19,7 +19,6 @@ export interface User {
   name: string;
   role: Role;
   locale: string;
-  daily_target_minutes: number | null;
   active: boolean;
   created_at: number;
 }
@@ -32,7 +31,8 @@ export interface Org {
   color_primary: string;
   color_accent: string;
   timezone: string;
-  daily_target_minutes: number;
+  default_weekly_hours: number;
+  default_workdays_per_week: number;
 }
 
 export interface Segment {
@@ -66,6 +66,18 @@ export interface DayView {
   day: Workday;
   segments: Segment[];
   totals: Totals;
+  /** Target for this day, from the contract that applied then. */
+  target_minutes: number;
+}
+
+export interface WorkTimeModel {
+  id: string;
+  user_id: string;
+  valid_from: string;
+  weekly_hours: number;
+  workdays_per_week: number;
+  note: string;
+  created_at: number;
 }
 
 export interface Balance {
@@ -96,6 +108,7 @@ export interface TodayData {
   balance_month: Balance;
   balance_total: Balance;
   target_minutes: number;
+  work_time_model: WorkTimeModel | null;
   outcome?: { outcome: string };
 }
 
@@ -106,6 +119,7 @@ export interface Me {
   balance_month: Balance;
   balance_total: Balance;
   target_minutes: number;
+  work_time_model: WorkTimeModel | null;
 }
 
 export interface LoginResponse {
@@ -143,6 +157,7 @@ export interface TeamRow {
   org_name: string;
   period: Balance;
   total: Balance;
+  current_model: WorkTimeModel | null;
 }
 
 const TOKEN_KEY = "daywerk.token";
@@ -327,7 +342,8 @@ export const api = {
     password: string;
     role: Role;
     locale?: string;
-    daily_target_minutes?: number | null;
+    weekly_hours?: number;
+    workdays_per_week?: number;
   }) => request<User>("/api/users", { method: "POST", body: JSON.stringify(body) }),
 
   updateUser: (
@@ -336,13 +352,33 @@ export const api = {
       name?: string;
       role?: Role;
       locale?: string;
-      daily_target_minutes?: number | null;
       active?: boolean;
       password?: string;
     },
   ) => request<User>(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
 
   deleteUser: (id: string) => request<void>(`/api/users/${id}`, { method: "DELETE" }),
+
+  workTimeModels: (userId: string) =>
+    request<WorkTimeModel[]>(`/api/users/${userId}/work-time-models`),
+
+  createWorkTimeModel: (
+    userId: string,
+    body: { valid_from: string; weekly_hours: number; workdays_per_week: number; note?: string },
+  ) =>
+    request<WorkTimeModel>(`/api/users/${userId}/work-time-models`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateWorkTimeModel: (
+    id: string,
+    body: { weekly_hours: number; workdays_per_week: number; note?: string },
+  ) =>
+    request<WorkTimeModel>(`/api/work-time-models/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   updateProfile: (body: { name?: string; locale?: string; password?: string }) =>
     request<User>("/api/profile", { method: "PUT", body: JSON.stringify(body) }),
@@ -379,7 +415,8 @@ export const api = {
     color_primary: string;
     color_accent: string;
     timezone: string;
-    daily_target_minutes: number;
+    default_weekly_hours: number;
+    default_workdays_per_week: number;
     logo_path?: string | null;
   }) => request<Org>("/api/org", { method: "PUT", body: JSON.stringify(body) }),
 
@@ -389,7 +426,8 @@ export const api = {
     name: string;
     slug: string;
     timezone?: string;
-    daily_target_minutes?: number;
+    default_weekly_hours?: number;
+    default_workdays_per_week?: number;
   }) => request<Org>("/api/orgs", { method: "POST", body: JSON.stringify(body) }),
 
   updateOrgById: (
@@ -399,7 +437,8 @@ export const api = {
       color_primary: string;
       color_accent: string;
       timezone: string;
-      daily_target_minutes: number;
+      default_weekly_hours: number;
+      default_workdays_per_week: number;
       logo_path?: string | null;
     },
   ) => request<Org>(`/api/orgs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),

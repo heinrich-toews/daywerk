@@ -23,7 +23,7 @@ use tower_http::cors::CorsLayer;
 use dw_core::{Account, AccountKind, Action, Annotation, Millis, Outcome, Role};
 use dw_storage::{
     Balance, BookingQuery, BookingRow, DayView, EPOCH_DATE, NewUser, Org, Stats, StorageError,
-    Store, TeamRow, User,
+    Store, TeamRow, User, WorkTimeModel,
 };
 
 // ---------------------------------------------------------------- state
@@ -200,6 +200,7 @@ struct MeResponse {
     balance_month: Balance,
     balance_total: Balance,
     target_minutes: i64,
+    work_time_model: Option<WorkTimeModel>,
 }
 
 #[derive(Serialize)]
@@ -222,6 +223,7 @@ struct TodayResponse {
     balance_month: Balance,
     balance_total: Balance,
     target_minutes: i64,
+    work_time_model: Option<WorkTimeModel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     outcome: Option<Outcome>,
 }
@@ -264,6 +266,23 @@ struct UpdateSegmentRequest {
 struct AccountParams {
     #[serde(default)]
     org_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NewWorkTimeModelRequest {
+    valid_from: String,
+    weekly_hours: f64,
+    workdays_per_week: i64,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateWorkTimeModelRequest {
+    weekly_hours: f64,
+    workdays_per_week: i64,
+    #[serde(default)]
+    note: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -316,8 +335,11 @@ struct NewUserRequest {
     role: Role,
     #[serde(default)]
     locale: Option<String>,
+    /// Optional first contract; falls back to the organisation default.
     #[serde(default)]
-    daily_target_minutes: Option<i64>,
+    weekly_hours: Option<f64>,
+    #[serde(default)]
+    workdays_per_week: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -328,8 +350,6 @@ struct UpdateUserRequest {
     role: Option<Role>,
     #[serde(default)]
     locale: Option<String>,
-    #[serde(default)]
-    daily_target_minutes: Option<i64>,
     #[serde(default)]
     active: Option<bool>,
     #[serde(default)]
@@ -380,7 +400,8 @@ struct UpdateOrgRequest {
     color_primary: String,
     color_accent: String,
     timezone: String,
-    daily_target_minutes: i64,
+    default_weekly_hours: f64,
+    default_workdays_per_week: i64,
     #[serde(default)]
     logo_path: Option<String>,
 }
@@ -392,7 +413,9 @@ struct NewOrgRequest {
     #[serde(default)]
     timezone: Option<String>,
     #[serde(default)]
-    daily_target_minutes: Option<i64>,
+    default_weekly_hours: Option<f64>,
+    #[serde(default)]
+    default_workdays_per_week: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -432,11 +455,23 @@ fn today_payload(
             }
         });
 
+    let day_date = snap
+        .day
+        .as_ref()
+        .map(|d| d.date.clone())
+        .unwrap_or_else(|| date.clone());
+    let work_time_model = state.store.work_time_model_at(&user.id, &day_date)?;
+    let target_minutes = work_time_model
+        .as_ref()
+        .map(|m| m.daily_target_minutes())
+        .unwrap_or_else(|| org.default_daily_minutes());
+
     let segments = snap.segments;
     let day = snap.day.map(|d| DayView {
         day: d,
         segments: segments.clone(),
         totals,
+        target_minutes,
     });
 
     let (from, to) = month_range(&date);
@@ -453,7 +488,8 @@ fn today_payload(
         active,
         balance_month,
         balance_total,
-        target_minutes: user.target_minutes(&org),
+        target_minutes,
+        work_time_model,
         outcome,
     })
 }
@@ -543,11 +579,17 @@ async fn me(
     let now = now_ms();
     let date = local_date(now, &org.timezone);
     let (from, to) = month_range(&date);
+    let work_time_model = state.store.work_time_model_at(&user.id, &date)?;
+    let target_minutes = work_time_model
+        .as_ref()
+        .map(|m| m.daily_target_minutes())
+        .unwrap_or_else(|| org.default_daily_minutes());
     Ok(Json(MeResponse {
         accounts: state.store.accounts(&user.org_id, false)?,
         balance_month: state.store.balance(&user.id, &from, &to, now)?,
         balance_total: state.store.balance(&user.id, EPOCH_DATE, &to, now)?,
-        target_minutes: user.target_minutes(&org),
+        target_minutes,
+        work_time_model,
         user,
         org,
     }))
@@ -692,14 +734,31 @@ async fn create_user(
     }
 
     let user = state.store.create_user(&NewUser {
-        org_id,
+        org_id: org_id.clone(),
         email: req.email,
         name: req.name,
         password_hash: hash_password(&req.password)?,
         role: req.role,
         locale: req.locale.unwrap_or_else(|| "de".into()),
-        daily_target_minutes: req.daily_target_minutes.filter(|v| *v > 0),
     })?;
+
+    // Give the new employee a contract from day one, so the balance never has
+    // to guess. Falls back to the organisation default.
+    let org = state.store.org(&org_id)?.ok_or(ApiError::NotFound)?;
+    let weekly_hours = req.weekly_hours.unwrap_or(org.default_weekly_hours);
+    let workdays = req
+        .workdays_per_week
+        .unwrap_or(org.default_workdays_per_week);
+    state.store.add_work_time_model(
+        &user.id,
+        "1970-01-01",
+        weekly_hours,
+        workdays,
+        "Initial",
+        &actor.id,
+        now_ms(),
+    )?;
+
     Ok(Json(user))
 }
 
@@ -737,16 +796,9 @@ async fn update_user(
         ));
     }
 
-    let target = match req.daily_target_minutes {
-        Some(0) => None,
-        Some(value) => Some(value),
-        None => current.daily_target_minutes,
-    };
     let active = req.active.unwrap_or(current.active);
 
-    let user = state
-        .store
-        .update_user(&id, &name, role, &locale, target, active)?;
+    let user = state.store.update_user(&id, &name, role, &locale, active)?;
     if let Some(password) = req.password {
         if password.len() < 6 {
             return Err(ApiError::BadRequest("password too short".into()));
@@ -791,14 +843,9 @@ async fn update_profile(
     let user = require_auth(&state, &headers)?;
     let name = req.name.unwrap_or(user.name);
     let locale = req.locale.unwrap_or(user.locale);
-    let updated = state.store.update_user(
-        &user.id,
-        &name,
-        user.role,
-        &locale,
-        user.daily_target_minutes,
-        user.active,
-    )?;
+    let updated = state
+        .store
+        .update_user(&user.id, &name, user.role, &locale, user.active)?;
     if let Some(password) = req.password {
         if password.len() < 6 {
             return Err(ApiError::BadRequest("password too short".into()));
@@ -922,7 +969,8 @@ async fn create_org(
         &req.name,
         &req.slug,
         req.timezone.as_deref().unwrap_or("Europe/Berlin"),
-        req.daily_target_minutes.unwrap_or(480),
+        req.default_weekly_hours.unwrap_or(40.0),
+        req.default_workdays_per_week.unwrap_or(5),
     )?;
     state.store.ensure_default_accounts(&org.id)?;
     Ok(Json(org))
@@ -942,7 +990,8 @@ async fn update_org_by_id(
         &req.color_primary,
         &req.color_accent,
         &req.timezone,
-        req.daily_target_minutes,
+        req.default_weekly_hours,
+        req.default_workdays_per_week,
         req.logo_path.as_deref(),
     )?))
 }
@@ -960,7 +1009,8 @@ async fn update_org(
         &req.color_primary,
         &req.color_accent,
         &req.timezone,
-        req.daily_target_minutes,
+        req.default_weekly_hours,
+        req.default_workdays_per_week,
         req.logo_path.as_deref(),
     )?))
 }
@@ -1061,6 +1111,83 @@ async fn bookings(
         limit: params.limit.unwrap_or(50).clamp(1, 200),
         offset: params.offset.unwrap_or(0).max(0),
     })?))
+}
+
+async fn list_work_time_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Vec<WorkTimeModel>>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    let target = state.store.user(&id)?.ok_or(ApiError::NotFound)?;
+    if !can_view_user(&actor, &target) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(state.store.work_time_models(&id)?))
+}
+
+async fn create_work_time_model(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<NewWorkTimeModelRequest>,
+) -> Result<Json<WorkTimeModel>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Admin)?;
+
+    let target = state.store.user(&id)?.ok_or(ApiError::NotFound)?;
+    NaiveDate::parse_from_str(&req.valid_from, "%Y-%m-%d")
+        .map_err(|_| ApiError::BadRequest("valid_from must be YYYY-MM-DD".into()))?;
+
+    let model = state.store.add_work_time_model(
+        &target.id,
+        &req.valid_from,
+        req.weekly_hours,
+        req.workdays_per_week,
+        &req.note,
+        &actor.id,
+        now_ms(),
+    )?;
+    let _ = state.store.audit(
+        &target.org_id,
+        &actor.id,
+        "work_time_model_created",
+        "work_time_model",
+        &model.id,
+        &format!(
+            "{{\"valid_from\":\"{}\",\"weekly_hours\":{},\"workdays_per_week\":{}}}",
+            model.valid_from, model.weekly_hours, model.workdays_per_week
+        ),
+        now_ms(),
+    );
+    Ok(Json(model))
+}
+
+async fn update_work_time_model(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UpdateWorkTimeModelRequest>,
+) -> Result<Json<WorkTimeModel>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Admin)?;
+
+    let model = state.store.update_work_time_model(
+        &id,
+        req.weekly_hours,
+        req.workdays_per_week,
+        &req.note,
+    )?;
+    let _ = state.store.audit(
+        &actor.org_id,
+        &actor.id,
+        "work_time_model_updated",
+        "work_time_model",
+        &id,
+        "{}",
+        now_ms(),
+    );
+    Ok(Json(model))
 }
 
 async fn delete_account(
@@ -1174,8 +1301,8 @@ fn build_report(
                 last_end,
                 work_ms: day.totals.work_ms,
                 break_ms: day.totals.break_ms,
-                target_ms: row.period.target_minutes * 60_000,
-                balance_ms: day.totals.work_ms - row.period.target_minutes * 60_000,
+                target_ms: day.target_minutes * 60_000,
+                balance_ms: day.totals.work_ms - day.target_minutes * 60_000,
                 segments,
             });
         }
@@ -1350,7 +1477,7 @@ async fn static_or_index(Extension(state): Extension<AppState>, uri: Uri) -> Res
 fn bootstrap(store: &Store) -> Result<(), String> {
     if store.orgs().map_err(|e| e.to_string())?.is_empty() {
         let org = store
-            .create_org("Daywerk", "default", "Europe/Berlin", 480)
+            .create_org("Daywerk", "default", "Europe/Berlin", 40.0, 5)
             .map_err(|e| e.to_string())?;
         store
             .ensure_default_accounts(&org.id)
@@ -1367,7 +1494,6 @@ fn bootstrap(store: &Store) -> Result<(), String> {
                 password_hash: hash,
                 role: Role::Admin,
                 locale: "de".into(),
-                daily_target_minutes: None,
             })
             .map_err(|e| e.to_string())?;
         tracing::info!(%email, user_id = %user.id, "created first administrator");
@@ -1422,6 +1548,11 @@ async fn main() {
         .route("/api/team", get(team))
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/{id}", patch(update_user).delete(delete_user))
+        .route(
+            "/api/users/{id}/work-time-models",
+            get(list_work_time_models).post(create_work_time_model),
+        )
+        .route("/api/work-time-models/{id}", patch(update_work_time_model))
         .route("/api/profile", put(update_profile))
         .route("/api/accounts", get(list_accounts).post(create_account))
         .route(

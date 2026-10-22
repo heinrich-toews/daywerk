@@ -26,8 +26,10 @@ auditable and impossible to double-book.
 - **Notes and materials** are captured whenever a work segment is closed — switching jobs,
   pausing or stopping — and shown in the history
 - **Stop while paused** deletes the break and ends the work segment when the break began
-- **Real hours balance** per worker: `worked − (target × days) + adjustments`
-  with an optional per-user target override
+- **Working time models per employee** — weekly hours and workdays per week
+  (40 h/5, 35 h/5, 24 h/3 …), effective-dated so a contract change never
+  rewrites past balances
+- **Real hours balance** per worker: `worked − (target per day) + adjustments`
 - **Three roles** — `employee` (own data), `office` (own organisation), `admin` (all organisations)
 - **Multi-tenant** — any number of organisations, each with its own accounts and branding
 - **German and English UI**, selectable per user
@@ -149,7 +151,9 @@ All endpoints return JSON and take `Authorization: Bearer <token>` except login.
 | `GET` | `/api/stats?from&to&user_id` | any / office | aggregates + balance |
 | `GET` | `/api/team?from&to&org_id` | office / admin | balances of every worker |
 | `GET` `POST` | `/api/users` | office / admin | list / create employees |
-| `PATCH` | `/api/users/{id}` | admin | role, target, locale, password, activate/deactivate |
+| `PATCH` | `/api/users/{id}` | admin | role, locale, password, activate/deactivate |
+| `GET` `POST` | `/api/users/{id}/work-time-models` | self / admin | contract history; add a new period |
+| `PATCH` | `/api/work-time-models/{id}` | admin | correct a contract |
 | `DELETE` | `/api/users/{id}` | admin | delete an employee **without entries** (409 otherwise) |
 | `PUT` | `/api/profile` | any | own name, locale, password |
 | `GET` `POST` | `/api/accounts` | any | list; create a work account in your own org |
@@ -170,7 +174,9 @@ All endpoints return JSON and take `Authorization: Bearer <token>` except login.
 ```
 organizations ─┬─ users ─┬─ workdays ─┬─ segments ── accounts
                │         │            │
-               ├─ accounts            └─ (one open segment per user, DB-enforced)
+               │         ├─ work_time_models  (contract history, effective-dated)
+               │         └─ balance_adjustments
+               ├─ accounts
                └─ org_settings
 ```
 
