@@ -1,7 +1,7 @@
 import { For, Show, createSignal } from "solid-js";
 import { api, getServerBase, isTauri, setServerBase } from "../api";
 import { LANGS, lang, t, type Lang } from "../i18n";
-import { changeLocale, me, refresh, roleAtLeast, setView } from "../state";
+import { changeLocale, me, refresh, roleAtLeast, setGlobalView } from "../state";
 
 export default function Settings() {
   const [name, setName] = createSignal(me()?.user.name ?? "");
@@ -141,7 +141,7 @@ export default function Settings() {
       </Show>
 
       <Show when={roleAtLeast("admin")}>
-        <button type="button" class="btn-ghost w-full" onClick={() => setView("admin")}>
+        <button type="button" class="btn-ghost w-full" onClick={() => setGlobalView("admin")}>
           {t("nav.admin")}
         </button>
       </Show>

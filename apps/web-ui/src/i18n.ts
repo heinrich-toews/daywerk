@@ -5,6 +5,12 @@ export const LANGS: Lang[] = ["de", "en"];
 
 const de = {
   "app.tagline": "Zeiten stempeln, klar und einfach.",
+  "tasks.placeholder": "Das Aufgabenmodul wird gerade gebaut.",
+  "world.time": "Zeiterfassung",
+  "world.tasks": "Aufgaben",
+  "nav.projects": "Projekte",
+  "nav.tasks": "Aufgaben",
+  "settings.back": "Zurück",
   "nav.today": "Heute",
   "nav.history": "Verlauf",
   "nav.stats": "Statistik",
@@ -158,6 +164,12 @@ type Key = keyof typeof de;
 
 const en: Record<Key, string> = {
   "app.tagline": "Punch in, clear and simple.",
+  "tasks.placeholder": "The task module is being built.",
+  "world.time": "Timekeeping",
+  "world.tasks": "Tasks",
+  "nav.projects": "Projects",
+  "nav.tasks": "Tasks",
+  "settings.back": "Back",
   "nav.today": "Today",
   "nav.history": "History",
   "nav.stats": "Statistics",

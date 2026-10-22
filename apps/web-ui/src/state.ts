@@ -2,7 +2,15 @@ import { createSignal } from "solid-js";
 import { api, ApiError, getToken, setToken, type Me, type Org, type TodayData } from "./api";
 import { setLang, type Lang } from "./i18n";
 
-export type View = "today" | "history" | "search" | "stats" | "team" | "settings" | "admin";
+/** The two worlds of the app. `time` is the punch clock, `tasks` the task board. */
+export type World = "time" | "tasks";
+export type TimeView = "today" | "history" | "search" | "stats" | "team";
+export type TaskView = "projects" | "tasks" | "search" | "stats";
+/** Views that belong to neither world (header gear). */
+export type GlobalView = "settings" | "admin";
+
+/** Kept for imports that still say `View`. */
+export type View = TimeView | GlobalView;
 
 export const [me, setMe] = createSignal<Me | null>(null);
 export const [today, setToday] = createSignal<TodayData | null>(null);
@@ -24,7 +32,20 @@ function applyToday(data: TodayData) {
   setToday(data);
   setTodayReceivedAt(Date.now());
 }
-export const [view, setView] = createSignal<View>("today");
+export const [world, setWorld] = createSignal<World>("time");
+export const [view, setView] = createSignal<TimeView>("today");
+export const [taskView, setTaskView] = createSignal<TaskView>("projects");
+export const [globalView, setGlobalView] = createSignal<GlobalView | null>(null);
+
+/** Switch worlds, leaving the other world on its last view. */
+export function switchWorld(next: World) {
+  setGlobalView(null);
+  setWorld(next);
+}
+
+export function openSettings() {
+  setGlobalView(globalView() === "settings" ? null : "settings");
+}
 export const [booting, setBooting] = createSignal(true);
 export const [busy, setBusy] = createSignal(false);
 export const [notice, setNotice] = createSignal<string | null>(null);
@@ -72,6 +93,8 @@ export async function signIn(email: string, password: string) {
   setLang((current.user.locale as Lang) ?? "de");
   applyToday(await api.today());
   setView("today");
+  setWorld("time");
+  setGlobalView(null);
 }
 
 export async function signOut() {
@@ -86,6 +109,8 @@ export async function signOut() {
   setTodayReceivedAt(0);
   todaySeq += 1;
   setView("today");
+  setWorld("time");
+  setGlobalView(null);
 }
 
 export async function punch(
