@@ -301,7 +301,8 @@ export default function TaskDetail() {
               </div>
             </section>
 
-            {/* subtasks */}
+            {/* subtasks: one level only, so a subtask has none */}
+            <Show when={detail().task.parent_id === null}>
             <section class="card space-y-2 p-4">
               <h2 class="font-display text-lg font-bold uppercase">{t("tasks.subtasks")}</h2>
               <div class="divide-y divide-line">
@@ -365,6 +366,7 @@ export default function TaskDetail() {
                 </button>
               </form>
             </section>
+            </Show>
 
             {/* comments */}
             <section class="card space-y-2 p-4">
