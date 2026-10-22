@@ -24,7 +24,8 @@ export default function TaskDetail() {
 
   const [comment, setComment] = createSignal("");
   const [subtaskTitle, setSubtaskTitle] = createSignal("");
-  const [spentMinutes, setSpentMinutes] = createSignal<number | null>(60);
+  // Start empty: the field is a blank duration, not a preset one hour.
+  const [spentMinutes, setSpentMinutes] = createSignal<number | null>(null);
   const [spentOn, setSpentOn] = createSignal(todayIso());
   const [note, setNote] = createSignal("");
   const [busy, setBusy] = createSignal(false);
