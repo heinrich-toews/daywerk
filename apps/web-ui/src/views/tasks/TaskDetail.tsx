@@ -1,5 +1,6 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type Member, type TaskDetail as TaskDetailData } from "../../api";
+import DurationField from "../../components/DurationField";
 import TaskFormSheet from "../../components/TaskFormSheet";
 import { dur, todayIso } from "../../format";
 import { t } from "../../i18n";
@@ -23,7 +24,7 @@ export default function TaskDetail() {
 
   const [comment, setComment] = createSignal("");
   const [subtaskTitle, setSubtaskTitle] = createSignal("");
-  const [minutes, setMinutes] = createSignal("60");
+  const [spentMinutes, setSpentMinutes] = createSignal<number | null>(60);
   const [spentOn, setSpentOn] = createSignal(todayIso());
   const [note, setNote] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -84,13 +85,11 @@ export default function TaskDetail() {
   async function addTime(e: Event) {
     e.preventDefault();
     const id = taskId();
-    if (!id) return;
-    const value = Number(minutes());
-    if (!Number.isFinite(value) || value <= 0) return;
-    await run(() =>
-      api.addTaskTime(id, { minutes: Math.round(value), note: note(), spent_on: spentOn() }),
-    );
+    const value = spentMinutes();
+    if (!id || !value || value <= 0) return;
+    await run(() => api.addTaskTime(id, { minutes: value, note: note(), spent_on: spentOn() }));
     setNote("");
+    setSpentMinutes(null);
   }
 
   async function removeTask() {
@@ -207,42 +206,36 @@ export default function TaskDetail() {
                 </div>
               </Show>
 
-              <form onSubmit={addTime} class="flex flex-wrap items-end gap-2 pt-1">
-                <div class="w-24">
-                  <label class="label" for="time-minutes">{t("tasks.minutes")}</label>
-                  <input
-                    id="time-minutes"
-                    type="number"
-                    min="1"
-                    max="1440"
-                    step="5"
-                    class="field"
-                    value={minutes()}
-                    onInput={(e) => setMinutes(e.currentTarget.value)}
-                  />
+              <form onSubmit={addTime} class="space-y-2 pt-1">
+                <DurationField value={spentMinutes()} onChange={setSpentMinutes} />
+                <div class="flex flex-wrap items-end gap-2">
+                  <div class="w-40">
+                    <label class="label" for="time-date">{t("tasks.date")}</label>
+                    <input
+                      id="time-date"
+                      type="date"
+                      class="field"
+                      value={spentOn()}
+                      onInput={(e) => setSpentOn(e.currentTarget.value)}
+                    />
+                  </div>
+                  <div class="min-w-40 flex-1">
+                    <label class="label" for="time-note">{t("tasks.note")}</label>
+                    <input
+                      id="time-note"
+                      class="field"
+                      value={note()}
+                      onInput={(e) => setNote(e.currentTarget.value)}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    class="btn-primary h-11"
+                    disabled={busy() || !spentMinutes()}
+                  >
+                    + {t("tasks.addTime")}
+                  </button>
                 </div>
-                <div class="w-36">
-                  <label class="label" for="time-date">{t("tasks.date")}</label>
-                  <input
-                    id="time-date"
-                    type="date"
-                    class="field"
-                    value={spentOn()}
-                    onInput={(e) => setSpentOn(e.currentTarget.value)}
-                  />
-                </div>
-                <div class="min-w-40 flex-1">
-                  <label class="label" for="time-note">{t("tasks.note")}</label>
-                  <input
-                    id="time-note"
-                    class="field"
-                    value={note()}
-                    onInput={(e) => setNote(e.currentTarget.value)}
-                  />
-                </div>
-                <button type="submit" class="btn-primary h-11" disabled={busy()}>
-                  + {t("tasks.addTime")}
-                </button>
               </form>
 
               <div class="divide-y divide-line">

@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from "solid-js";
 import { api, type Member, type Task, type TaskPriority, type TaskStatus } from "../api";
+import DurationField from "./DurationField";
 import { t } from "../i18n";
 import { PRIORITIES, STATUSES, priorityLabel, statusLabel } from "../views/tasks/util";
 import Sheet from "./Sheet";
@@ -21,16 +22,11 @@ export default function TaskFormSheet(props: {
   const [due, setDue] = createSignal(props.task?.due_date ?? "");
   const [priority, setPriority] = createSignal<TaskPriority>(props.task?.priority ?? "normal");
   const [status, setStatus] = createSignal<TaskStatus>(props.task?.status ?? "open");
-  const [estimate, setEstimate] = createSignal(
-    props.task?.estimate_minutes ? String(props.task.estimate_minutes / 60) : "",
+  const [estimateMinutes, setEstimateMinutes] = createSignal<number | null>(
+    props.task?.estimate_minutes ?? null,
   );
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
-
-  const estimateMinutes = () => {
-    const hours = Number(estimate().replace(",", "."));
-    return estimate().trim() === "" || !Number.isFinite(hours) ? null : Math.round(hours * 60);
-  };
 
   async function save(e: Event) {
     e.preventDefault();
@@ -133,18 +129,6 @@ export default function TaskFormSheet(props: {
               onInput={(e) => setDue(e.currentTarget.value)}
             />
           </div>
-          <div>
-            <label class="label" for="task-estimate">{t("tasks.estimate")} (h)</label>
-            <input
-              id="task-estimate"
-              type="number"
-              min="0"
-              step="0.25"
-              class="field"
-              value={estimate()}
-              onInput={(e) => setEstimate(e.currentTarget.value)}
-            />
-          </div>
           <Show when={editing()}>
             <div>
               <label class="label" for="task-status">{t("tasks.status")}</label>
@@ -158,6 +142,15 @@ export default function TaskFormSheet(props: {
               </select>
             </div>
           </Show>
+        </div>
+
+        <div>
+          <span class="label">{t("tasks.estimate")}</span>
+          <DurationField
+            value={estimateMinutes()}
+            onChange={setEstimateMinutes}
+            allowEmpty={true}
+          />
         </div>
 
         <Show when={error()}>

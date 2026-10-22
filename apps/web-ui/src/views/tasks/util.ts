@@ -61,3 +61,22 @@ export function effortPercent(spent: number, estimate: number): number {
   if (estimate <= 0) return spent > 0 ? 100 : 0;
   return Math.min(100, Math.round((spent / estimate) * 100));
 }
+
+/** Add a chip delta to a duration, clamped to the maximum (default 24 h). */
+export function addDuration(
+  current: number | null,
+  delta: number,
+  maxMinutes = 24 * 60,
+): number {
+  return Math.min(maxMinutes, (current ?? 0) + delta);
+}
+
+/** Hours and minutes from the two input fields, clamped to a valid duration.
+ * Extra minutes roll over (`1 h 75 min` → `2:15`), which is what users expect
+ * when they type instead of using the chips. */
+export function toMinutes(hours: number, minutes: number, maxMinutes = 24 * 60): number {
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return 0;
+  const h = Math.max(0, Math.floor(hours));
+  const m = Math.max(0, Math.floor(minutes));
+  return Math.min(maxMinutes, h * 60 + m);
+}
