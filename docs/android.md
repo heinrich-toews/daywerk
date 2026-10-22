@@ -97,7 +97,7 @@ the hand patches. After re-running it, apply them again:
 pnpm android:init --ci && scripts/android-patch.sh
 ```
 
-`scripts/android-patch.sh` is idempotent and does four things:
+`scripts/android-patch.sh` is idempotent and does five things:
 
 1. **`BuildTask.kt`** — the Gradle `rust` task runs `pnpm tauri …`, which needs a
    local CLI install. This repo uses the global CLI, so the executable becomes
@@ -111,6 +111,72 @@ pnpm android:init --ci && scripts/android-patch.sh
 4. **`themes.xml` / `colors.xml`** — the web UI is light, so force a light window
    and paint the strip behind the bars in the app background colour. XML comments
    must not contain `--`.
+5. **`app/build.gradle.kts`** — a `signingConfigs { create("release") }` block
+   that reads the keystore described in [Release signing](#release-signing).
+
+## Release signing
+
+Release APKs are signed with a keystore that is **not** in the repository:
+
+| Item | Path |
+|---|---|
+| Keystore | `~/.config/daywerk/daywerk-release.jks` (RSA 4096, alias `daywerk`, 10 000 days) |
+| Credentials | `~/.config/daywerk/keystore.properties` (mode 600) |
+
+`keystore.properties` holds the absolute keystore path plus the passwords:
+
+```properties
+storeFile=/home/twx/.config/daywerk/daywerk-release.jks
+storePassword=…
+keyAlias=daywerk
+keyPassword=…
+```
+
+`scripts/android-patch.sh` adds a `signingConfigs { create("release") }` block to
+`app/build.gradle.kts` that reads it. The path comes from
+`DAYWERK_KEYSTORE_PROPERTIES`; without the variable Gradle looks for
+`app/keystore.properties`, and a release build fails with *"Keystore file not
+set for signing config release"*:
+
+```sh
+VITE_SERVER_URL=https://time.hgs-t.de \
+DAYWERK_KEYSTORE_PROPERTIES=$HOME/.config/daywerk/keystore.properties \
+pnpm android:build --apk --target aarch64 x86_64
+```
+
+The universal release APK lands in
+`apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/`
+(and the AAB, if you pass `--aab`, in `…/outputs/bundle/…`). Verify it:
+
+```sh
+$ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs \
+  apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+```
+
+The signer's SHA-256 must be
+`9E:67:63:7E:FF:40:44:38:86:27:32:62:40:CB:A1:9A:8A:35:03:5E:1F:8C:FE:3B:D8:97:33:E6:2A:97:58:A0`.
+
+**Back up the keystore and its passwords.** Android identifies an app by its
+signing key: if it is lost, updates can only be installed after uninstalling the
+old app (Google Play rejects a different key outright). Keep both files in a
+password manager or an encrypted backup — never in git (`.gitignore` covers
+`*.jks`, `*.keystore` and `keystore.properties`).
+
+**Versioning:** bump `version` in `apps/desktop/src-tauri/tauri.conf.json` for
+every release. It becomes the Android `versionName`, and `versionCode` is derived
+from it, so it must increase monotonically.
+
+**Debug vs. release:** a device with the debug build installed refuses the
+release APK (`INSTALL_FAILED_UPDATE_INCOMPATIBLE` — different signatures).
+Uninstall once:
+
+```sh
+adb uninstall de.twxsoft.daywerk
+adb install apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+```
+
+**Distribution:** side-load the universal APK for now; build the AAB only if the
+app is published to Google Play.
 
 ## Notes / gotchas
 

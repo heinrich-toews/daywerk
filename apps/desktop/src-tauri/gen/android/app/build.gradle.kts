@@ -14,6 +14,17 @@ val tauriProperties = Properties().apply {
     }
 }
 
+
+// Release signing: the keystore lives outside the repository, pointed to by
+// DAYWERK_KEYSTORE_PROPERTIES (absolute path) or app/keystore.properties.
+val daywerkKeystoreFile =
+    file(System.getenv("DAYWERK_KEYSTORE_PROPERTIES") ?: "keystore.properties")
+val daywerkKeystore = Properties().apply {
+    if (daywerkKeystoreFile.exists()) {
+        daywerkKeystoreFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "de.twxsoft.daywerk"
@@ -24,6 +35,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        create("release") {
+            if (daywerkKeystoreFile.exists()) {
+                storeFile = file(daywerkKeystore.getProperty("storeFile"))
+                storePassword = daywerkKeystore.getProperty("storePassword")
+                keyAlias = daywerkKeystore.getProperty("keyAlias")
+                keyPassword = daywerkKeystore.getProperty("keyPassword")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -39,6 +60,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
             // Self-hosted servers are usually plain HTTP on a LAN.
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             optimization {

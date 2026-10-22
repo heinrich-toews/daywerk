@@ -23,3 +23,8 @@ node_modules
 
 # logs
 *.log
+
+# Android signing (kept outside the repo)
+keystore.properties
+*.jks
+*.keystore

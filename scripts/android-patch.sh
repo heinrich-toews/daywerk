@@ -144,5 +144,57 @@ theme = """<resources xmlns:tools="http://schemas.android.com/tools">
 (gen / "app/src/main/res/values/themes.xml").write_text(theme)
 (gen / "app/src/main/res/values-night/themes.xml").write_text(theme)
 
+
+# 5. release signing — keystore stays outside the repository
+gradle = gen / "app/build.gradle.kts"
+text = gradle.read_text()
+if "signingConfigs" not in text:
+    loader = '''
+// Release signing: the keystore lives outside the repository, pointed to by
+// DAYWERK_KEYSTORE_PROPERTIES (absolute path) or app/keystore.properties.
+val daywerkKeystoreFile =
+    file(System.getenv("DAYWERK_KEYSTORE_PROPERTIES") ?: "keystore.properties")
+val daywerkKeystore = Properties().apply {
+    if (daywerkKeystoreFile.exists()) {
+        daywerkKeystoreFile.inputStream().use { load(it) }
+    }
+}
+'''
+    if "\nandroid {" not in text:
+        raise SystemExit("error: cannot find the android block")
+    text = text.replace("\nandroid {", "\n" + loader + "\nandroid {", 1)
+
+    if "    buildTypes {" not in text:
+        raise SystemExit("error: cannot find buildTypes")
+    text = text.replace(
+        "    buildTypes {",
+        '''    signingConfigs {
+        create("release") {
+            if (daywerkKeystoreFile.exists()) {
+                storeFile = file(daywerkKeystore.getProperty("storeFile"))
+                storePassword = daywerkKeystore.getProperty("storePassword")
+                keyAlias = daywerkKeystore.getProperty("keyAlias")
+                keyPassword = daywerkKeystore.getProperty("keyPassword")
+            }
+        }
+    }
+    buildTypes {''',
+        1,
+    )
+
+    marker = '''        getByName("release") {
+            // Self-hosted servers are usually plain HTTP on a LAN.'''
+    if marker not in text:
+        raise SystemExit("error: cannot find the release build type")
+    text = text.replace(
+        marker,
+        '''        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            // Self-hosted servers are usually plain HTTP on a LAN.''',
+        1,
+    )
+    gradle.write_text(text)
+    changed.append("release signing")
+
 print("patched:", ", ".join(changed) if changed else "already up to date")
 PY
