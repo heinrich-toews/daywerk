@@ -295,6 +295,8 @@ export const api = {
     },
   ) => request<User>(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
 
+  deleteUser: (id: string) => request<void>(`/api/users/${id}`, { method: "DELETE" }),
+
   updateProfile: (body: { name?: string; locale?: string; password?: string }) =>
     request<User>("/api/profile", { method: "PUT", body: JSON.stringify(body) }),
 

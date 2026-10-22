@@ -11,36 +11,81 @@ import {
 import { t } from "../i18n";
 import { me, refresh, signOut } from "../state";
 
-function UserRow(props: { user: User; orgs: Org[]; onSaved: (user: User) => void }) {
+function UserRow(props: {
+  user: User;
+  orgs: Org[];
+  onSaved: (user: User) => void;
+  onDeleted: (id: string) => void;
+}) {
   const [role, setRole] = createSignal<Role>(props.user.role);
   const [target, setTarget] = createSignal(
     props.user.daily_target_minutes ? String(props.user.daily_target_minutes) : "",
   );
   const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
 
   const orgName = () => props.orgs.find((o) => o.id === props.user.org_id)?.name ?? "";
 
+  function describe(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.toLowerCase().includes("deactivate") ? t("admin.deleteUserUsed") : message;
+  }
+
   async function save() {
     setBusy(true);
-    setError(false);
+    setError(null);
     try {
       const updated = await api.updateUser(props.user.id, {
         role: role(),
         daily_target_minutes: target() === "" ? 0 : Number(target()),
       });
       props.onSaved(updated);
-    } catch {
-      setError(true);
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleActive() {
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await api.updateUser(props.user.id, { active: !props.user.active });
+      props.onSaved(updated);
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`${t("admin.delete")}: ${props.user.name}?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteUser(props.user.id);
+      props.onDeleted(props.user.id);
+    } catch (err) {
+      setError(describe(err));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div class="flex flex-wrap items-center gap-2 border-b border-line py-2 last:border-0">
+    <div class="border-b border-line py-2 last:border-0">
+      <div class="flex flex-wrap items-center gap-2">
       <div class="min-w-0 flex-1">
-        <div class="truncate text-sm font-semibold">{props.user.name}</div>
+        <div class="truncate text-sm font-semibold">
+          {props.user.name}
+          <Show when={!props.user.active}>
+            <span class="ml-2 rounded bg-line px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted">
+              {t("admin.inactive")}
+            </span>
+          </Show>
+        </div>
         <div class="truncate text-xs text-muted">
           {props.user.email}
           <Show when={orgName()}>
@@ -70,8 +115,31 @@ function UserRow(props: { user: User; orgs: Org[]; onSaved: (user: User) => void
       />
 
       <button type="button" class="btn-ghost px-3 py-1.5 text-sm" disabled={busy()} onClick={() => void save()}>
-        {error() ? "!" : t("settings.save")}
+        {t("settings.save")}
       </button>
+
+      <button
+        type="button"
+        class="btn-ghost px-3 py-1.5 text-sm"
+        disabled={busy()}
+        onClick={() => void toggleActive()}
+      >
+        {props.user.active ? t("admin.deactivate") : t("admin.activate")}
+      </button>
+
+      <button
+        type="button"
+        class="rounded-lg border border-danger/40 px-3 py-1.5 text-sm font-semibold text-danger hover:bg-danger/10"
+        disabled={busy()}
+        onClick={() => void remove()}
+      >
+        {t("admin.delete")}
+      </button>
+      </div>
+
+      <Show when={error()}>
+        {(message) => <p class="mt-1 text-xs font-medium text-danger">{message()}</p>}
+      </Show>
     </div>
   );
 }
@@ -467,6 +535,7 @@ export default function Admin() {
                 onSaved={(updated) =>
                   setUsers((list) => list.map((u) => (u.id === updated.id ? updated : u)))
                 }
+                onDeleted={(id) => setUsers((list) => list.filter((u) => u.id !== id))}
               />
             )}
           </For>

@@ -264,6 +264,50 @@ def main() -> int:
     status, ctype, body = fetch_raw("/api/export/timesheet.xlsx", admin_token)
     check(status == 200 and body[:2] == b"PK", f"admin downloads xlsx ({status})")
 
+    # ---- employee deletion ----------------------------------------------
+    worker_id = call("/api/me", worker_token)[1]["user"]["id"]
+    admin_id = admin["user"]["id"]
+
+    status, temp_user = call(
+        "/api/users", admin_token, "POST",
+        {"email": "temp@test.local", "name": "Temp", "password": "test1234",
+         "role": "employee", "org_id": org_a},
+    )
+    check(status == 200, f"create a throwaway employee ({status})")
+
+    status, _ = call(f"/api/users/{temp_user['id']}", worker_token, "DELETE")
+    check(status == 403, f"employee cannot delete users ({status})")
+
+    status, _ = call(f"/api/users/{temp_user['id']}", admin_token, "DELETE")
+    check(status == 204, f"admin deletes an employee without entries ({status})")
+
+    status, _ = call(f"/api/users/{temp_user['id']}", admin_token, "DELETE")
+    check(status == 404, f"deleted employee is gone ({status})")
+
+    status, _ = call(f"/api/users/{worker_id}", admin_token, "DELETE")
+    check(status == 409, f"employee with entries is protected ({status})")
+
+    status, _ = call(f"/api/users/{admin_id}", admin_token, "DELETE")
+    check(status == 409, f"admin cannot delete themselves ({status})")
+
+    status, off = call(f"/api/users/{worker_id}", admin_token, "PATCH", {"active": False})
+    check(status == 200 and off["active"] is False, f"admin deactivates the employee ({status})")
+
+    status, _ = call(
+        "/api/auth/login", method="POST",
+        body={"email": "worker@test.local", "password": "test1234"},
+    )
+    check(status == 401, f"deactivated employee cannot log in ({status})")
+
+    status, team = call("/api/team", tokens["office@test.local"])
+    check(
+        any(r["user"]["email"] == "worker@test.local" and not r["user"]["active"] for r in team),
+        "deactivated employee stays visible with the balance",
+    )
+
+    status, _ = call(f"/api/users/{worker_id}", admin_token, "PATCH", {"active": True})
+    check(status == 200, f"employee reactivated ({status})")
+
     status, backup = call("/api/export", admin_token)
     check(
         status == 200 and backup["format"] == "daywerk-backup",

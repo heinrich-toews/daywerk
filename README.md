@@ -31,6 +31,8 @@ auditable and impossible to double-book.
 - **Three roles** — `employee` (own data), `office` (own organisation), `admin` (all organisations)
 - **Multi-tenant** — any number of organisations, each with its own accounts and branding
 - **German and English UI**, selectable per user
+- **Employee management** — deactivate a leaver (login blocked, balance stays on record) or
+  delete an employee that never recorded anything
 - **Search** across notes and materials, scoped to the office's organisation
 - **XLSX and PDF export** of the timesheet (summary, per day, raw segments with notes)
 - **JSON backup / restore** as a single file
@@ -133,7 +135,8 @@ All endpoints return JSON and take `Authorization: Bearer <token>` except login.
 | `GET` | `/api/stats?from&to&user_id` | any / office | aggregates + balance |
 | `GET` | `/api/team?from&to&org_id` | office / admin | balances of every worker |
 | `GET` `POST` | `/api/users` | office / admin | list / create employees |
-| `PATCH` | `/api/users/{id}` | admin | role, target, locale, password |
+| `PATCH` | `/api/users/{id}` | admin | role, target, locale, password, activate/deactivate |
+| `DELETE` | `/api/users/{id}` | admin | delete an employee **without entries** (409 otherwise) |
 | `PUT` | `/api/profile` | any | own name, locale, password |
 | `GET` `POST` | `/api/accounts` | any | list; create a work account in your own org |
 | `PATCH` | `/api/accounts/{id}` | admin | rename, archive, restore, reorder |

@@ -140,6 +140,11 @@ export default function Team() {
                   <div class="min-w-0">
                     <div class="truncate font-display text-lg font-bold uppercase leading-tight">
                       {row.user.name}
+                      <Show when={!row.user.active}>
+                        <span class="ml-2 rounded bg-line px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase text-muted">
+                          {t("admin.inactive")}
+                        </span>
+                      </Show>
                     </div>
                     <div class="truncate text-xs text-muted">
                       {row.org_name}

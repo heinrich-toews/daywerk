@@ -716,6 +716,27 @@ async fn update_user(
     let name = req.name.unwrap_or(current.name);
     let role = req.role.unwrap_or(current.role);
     let locale = req.locale.unwrap_or(current.locale);
+
+    // Nobody may lock themselves out, and the instance must keep one active
+    // administrator.
+    let loses_admin = current.role.is_admin() && !role.is_admin();
+    let loses_active = current.active && req.active == Some(false);
+    if id == actor.id && (loses_admin || loses_active) {
+        return Err(ApiError::Conflict(
+            "you cannot deactivate or demote your own account".into(),
+        ));
+    }
+    // Only the last *administrator* is protected; ordinary employees can be
+    // deactivated freely.
+    if current.role.is_admin()
+        && (loses_admin || loses_active)
+        && state.store.count_active_admins()? <= 1
+    {
+        return Err(ApiError::Conflict(
+            "the last administrator must stay active and keep the admin role".into(),
+        ));
+    }
+
     let target = match req.daily_target_minutes {
         Some(0) => None,
         Some(value) => Some(value),
@@ -733,6 +754,33 @@ async fn update_user(
         state.store.set_password(&id, &hash_password(&password)?)?;
     }
     Ok(Json(user))
+}
+
+async fn delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Admin)?;
+
+    if id == actor.id {
+        return Err(ApiError::Conflict(
+            "you cannot delete your own account".into(),
+        ));
+    }
+    let user = state.store.user(&id)?.ok_or(ApiError::NotFound)?;
+    state.store.delete_user(&id)?;
+    let _ = state.store.audit(
+        &user.org_id,
+        &actor.id,
+        "user_deleted",
+        "user",
+        &id,
+        "{}",
+        now_ms(),
+    );
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn update_profile(
@@ -1373,7 +1421,7 @@ async fn main() {
         .route("/api/stats", get(stats))
         .route("/api/team", get(team))
         .route("/api/users", get(list_users).post(create_user))
-        .route("/api/users/{id}", patch(update_user))
+        .route("/api/users/{id}", patch(update_user).delete(delete_user))
         .route("/api/profile", put(update_profile))
         .route("/api/accounts", get(list_accounts).post(create_account))
         .route(

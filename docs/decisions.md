@@ -67,3 +67,13 @@ The API refuses with `409` and the UI offers archiving instead. The primary
 account and the break account cannot be deleted either; they are structural.
 Archived accounts keep their names free for reuse, and restoring one that
 collides with a new active name is refused by a partial unique index.
+
+## Removing employees
+
+Same rule as time accounts: an employee with booked time is never deleted,
+because the record has to survive. The API answers `409` and the office
+deactivates instead. A deactivated employee cannot log in (the session lookup
+requires `active = 1`) but stays in the team report and in exports, so their
+hours and balance remain readable. Employees without any entries are deleted
+for real, and the last active administrator is protected from both deletion and
+deactivation.

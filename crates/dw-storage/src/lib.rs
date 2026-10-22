@@ -421,6 +421,64 @@ impl Store {
         self.user(id)?.ok_or(StorageError::NotFound)
     }
 
+    pub fn count_active_admins(&self) -> Result<i64> {
+        let conn = self.lock();
+        Ok(conn.query_row(
+            "SELECT count(*) FROM users WHERE role = 'admin' AND active = 1",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Delete an employee who never recorded anything.
+    ///
+    /// Anyone with booked time, balance adjustments or the last administrator
+    /// is refused: the office should deactivate a leaver instead, which keeps
+    /// the history and blocks the login.
+    pub fn delete_user(&self, id: &str) -> Result<()> {
+        let user = self.user(id)?.ok_or(StorageError::NotFound)?;
+
+        let (segments, days, adjustments) = {
+            let conn = self.lock();
+            let segments: i64 = conn.query_row(
+                "SELECT count(*) FROM segments WHERE user_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?;
+            let days: i64 = conn.query_row(
+                "SELECT count(*) FROM workdays WHERE user_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?;
+            let adjustments: i64 = conn.query_row(
+                "SELECT count(*) FROM balance_adjustments WHERE user_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?;
+            (segments, days, adjustments)
+        };
+
+        if segments > 0 || days > 0 {
+            return Err(StorageError::Conflict(format!(
+                "employee has {days} recorded day(s); deactivate instead"
+            )));
+        }
+        if adjustments > 0 {
+            return Err(StorageError::Conflict(
+                "employee has balance adjustments; deactivate instead".into(),
+            ));
+        }
+        if user.role == Role::Admin && self.count_active_admins()? <= 1 {
+            return Err(StorageError::Conflict(
+                "the last administrator cannot be deleted".into(),
+            ));
+        }
+
+        self.lock()
+            .execute("DELETE FROM users WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     pub fn set_password(&self, id: &str, password_hash: &str) -> Result<()> {
         self.lock().execute(
             "UPDATE users SET password_hash = ?2 WHERE id = ?1",
@@ -1116,11 +1174,11 @@ impl Store {
         let mut stmt = match org_id {
             Some(_) => conn.prepare(
                 "SELECT id, org_id, email, name, role, locale, daily_target_minutes, active, created_at
-                   FROM users WHERE org_id = ?1 AND active = 1 ORDER BY name COLLATE NOCASE",
+                   FROM users WHERE org_id = ?1 ORDER BY active DESC, name COLLATE NOCASE",
             )?,
             None => conn.prepare(
                 "SELECT id, org_id, email, name, role, locale, daily_target_minutes, active, created_at
-                   FROM users WHERE active = 1 ORDER BY name COLLATE NOCASE",
+                   FROM users WHERE 1 = 1 ORDER BY active DESC, name COLLATE NOCASE",
             )?,
         };
         let users = match org_id {
@@ -2334,6 +2392,111 @@ mod tests {
         // restoring the first one now collides with the new active name
         let err = store.update_account(&account.id, "Lager", None, 100, false, false);
         assert!(err.is_err(), "two active accounts may not share a name");
+    }
+
+    fn make_user(store: &Store, org: &Org, email: &str, role: Role) -> User {
+        store
+            .create_user(&NewUser {
+                org_id: org.id.clone(),
+                email: email.into(),
+                name: email.split('@').next().unwrap_or("user").into(),
+                password_hash: "x".into(),
+                role,
+                locale: "de".into(),
+                daily_target_minutes: None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn employees_without_entries_can_be_deleted() {
+        let (store, org, _) = store();
+        let temp = make_user(&store, &org, "temp@example.org", Role::Employee);
+        store.delete_user(&temp.id).unwrap();
+        assert!(store.user(&temp.id).unwrap().is_none());
+        assert_eq!(store.users_of_org(&org.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn employees_with_entries_are_protected_from_deletion() {
+        let (store, org, user) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let work = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Work)
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: work.id.clone(),
+                },
+                NOW,
+                DATE,
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(&user, &Action::Stop, NOW + 60_000, DATE, "test")
+            .unwrap();
+
+        let err = store.delete_user(&user.id);
+        assert!(matches!(err, Err(StorageError::Conflict(_))));
+        assert!(store.user(&user.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn the_last_administrator_cannot_be_deleted() {
+        let (store, org, _) = store();
+        let admin = make_user(&store, &org, "boss@example.org", Role::Admin);
+        assert_eq!(store.count_active_admins().unwrap(), 1);
+
+        let err = store.delete_user(&admin.id);
+        assert!(matches!(err, Err(StorageError::Conflict(_))));
+
+        // a second admin makes the first one deletable
+        let second = make_user(&store, &org, "boss2@example.org", Role::Admin);
+        assert_eq!(store.count_active_admins().unwrap(), 2);
+        store.delete_user(&admin.id).unwrap();
+        assert!(store.user(&second.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn deactivated_employees_stay_visible_for_balances_but_cannot_log_in() {
+        let (store, org, user) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let work = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Work)
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: work.id.clone(),
+                },
+                NOW,
+                DATE,
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(&user, &Action::Stop, NOW + 60_000, DATE, "test")
+            .unwrap();
+
+        store
+            .update_user(&user.id, &user.name, user.role, "de", None, false)
+            .unwrap();
+
+        // still listed in the team report with the balance intact
+        let team = store.team(Some(&org.id), DATE, DATE, NOW).unwrap();
+        assert_eq!(team.len(), 1);
+        assert!(!team[0].user.active);
+        assert_eq!(team[0].period.worked_ms, 60_000);
+
+        // but no session can be established
+        store.create_session("hash", &user.id, NOW).unwrap();
+        assert!(store.session_user("hash", NOW).unwrap().is_none());
     }
 
     #[test]
