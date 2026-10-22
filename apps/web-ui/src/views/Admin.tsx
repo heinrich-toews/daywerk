@@ -474,8 +474,12 @@ export default function Admin() {
 
       <section class="card space-y-3 p-4">
         <h2 class="font-display text-lg font-bold uppercase">{t("admin.accounts")}</h2>
+
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">
+          {t("admin.accountsActive")}
+        </h3>
         <div class="divide-y divide-line">
-          <For each={accounts()}>
+          <For each={accounts().filter((a) => !a.archived)}>
             {(account) => (
               <div class="flex items-center gap-2 py-2">
                 <div class="min-w-0 flex-1">
@@ -487,24 +491,13 @@ export default function Admin() {
                   </div>
                 </div>
                 <Show when={!account.is_primary && account.kind !== "break"}>
-                  <Show when={account.archived}>
-                    <button
-                      type="button"
-                      class="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-primary"
-                      onClick={() => void setArchived(account, false)}
-                    >
-                      {t("admin.restore")}
-                    </button>
-                  </Show>
-                  <Show when={!account.archived}>
-                    <button
-                      type="button"
-                      class="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-primary"
-                      onClick={() => void setArchived(account, true)}
-                    >
-                      {t("admin.archive")}
-                    </button>
-                  </Show>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-primary"
+                    onClick={() => void setArchived(account, true)}
+                  >
+                    {t("admin.archive")}
+                  </button>
                   <button
                     type="button"
                     class="rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/10"
@@ -517,6 +510,41 @@ export default function Admin() {
             )}
           </For>
         </div>
+
+        <Show when={accounts().some((a) => a.archived)}>
+          <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">
+            {t("admin.accountsInactive")}
+          </h3>
+          <div class="divide-y divide-line">
+            <For each={accounts().filter((a) => a.archived)}>
+              {(account) => (
+                <div class="flex items-center gap-2 py-2">
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate text-sm font-semibold text-muted">{account.name}</div>
+                    <div class="text-xs text-muted">
+                      {account.kind === "break" ? t("day.break") : t("day.work")}
+                      {` · ${t("admin.archived")}`}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-muted hover:text-primary"
+                    onClick={() => void setArchived(account, false)}
+                  >
+                    {t("admin.restore")}
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/10"
+                    onClick={() => void removeAccount(account)}
+                  >
+                    {t("admin.delete")}
+                  </button>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
 
         <Show when={accountError()}>
           {(message) => <p class="text-sm font-medium text-danger">{message()}</p>}

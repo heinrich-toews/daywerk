@@ -32,7 +32,6 @@ use dw_storage::{
 struct AppState {
     store: Arc<Store>,
     web_root: String,
-    index_html: Option<Arc<String>>,
 }
 
 // ---------------------------------------------------------------- errors
@@ -438,7 +437,21 @@ fn today_payload(
     let org = state.store.org(&user.org_id)?.ok_or(ApiError::NotFound)?;
     let date = local_date(now, &org.timezone);
     let snap = state.store.snapshot(&user.id, &user.org_id, &date)?;
-    let accounts = state.store.accounts(&user.org_id, false)?;
+
+    // Active accounts, plus the one a running timer is still on: archiving an
+    // account mid-shift must not make the running segment disappear. It drops
+    // out as soon as the segment is closed.
+    let running_account = snap
+        .segments
+        .iter()
+        .find(|s| s.ended_at.is_none())
+        .map(|s| s.account_id.clone());
+    let accounts: Vec<Account> = snap
+        .accounts
+        .iter()
+        .filter(|a| !a.archived || running_account.as_deref() == Some(a.id.as_str()))
+        .cloned()
+        .collect();
 
     let totals = dw_core::totals(&snap.segments, &snap.accounts, now);
     let active = snap
@@ -585,7 +598,8 @@ async fn me(
         .map(|m| m.daily_target_minutes())
         .unwrap_or_else(|| org.default_daily_minutes());
     Ok(Json(MeResponse {
-        accounts: state.store.accounts(&user.org_id, false)?,
+        // Includes archived accounts: the history shows their names.
+        accounts: state.store.accounts(&user.org_id, true)?,
         balance_month: state.store.balance(&user.id, &from, &to, now)?,
         balance_total: state.store.balance(&user.id, EPOCH_DATE, &to, now)?,
         target_minutes,
@@ -929,17 +943,58 @@ async fn update_account(
     Json(req): Json<UpdateAccountRequest>,
 ) -> Result<Json<Account>, ApiError> {
     let actor = require_auth(&state, &headers)?;
-    require_role(&actor, Role::Admin)?;
+    require_role(&actor, Role::Office)?;
 
     let current = state.store.account(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(state.store.update_account(
+    if actor.role != Role::Admin && current.org_id != actor.org_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Only an administrator may move the primary flag.
+    if req.is_primary.is_some() && !actor.role.is_admin() {
+        return Err(ApiError::Forbidden);
+    }
+
+    let archived = req.archived.unwrap_or(current.archived);
+    if archived && !current.archived {
+        if current.is_primary {
+            return Err(ApiError::Conflict(
+                "the primary time account cannot be archived".into(),
+            ));
+        }
+        if current.kind == AccountKind::Break {
+            return Err(ApiError::Conflict(
+                "the break account cannot be archived".into(),
+            ));
+        }
+    }
+
+    let account = state.store.update_account(
         &id,
         &req.name.unwrap_or(current.name),
         req.icon.or(current.icon).as_deref(),
         req.sort_order.unwrap_or(current.sort_order),
-        req.archived.unwrap_or(current.archived),
+        archived,
         req.is_primary.unwrap_or(current.is_primary),
-    )?))
+    )?;
+
+    if account.archived != current.archived {
+        let _ = state.store.audit(
+            &account.org_id,
+            &actor.id,
+            if account.archived {
+                "account_archived"
+            } else {
+                "account_restored"
+            },
+            "account",
+            &id,
+            "{}",
+            now_ms(),
+        );
+    }
+
+    Ok(Json(account))
 }
 
 async fn get_org(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Org>, ApiError> {
@@ -1462,13 +1517,12 @@ async fn static_or_index(Extension(state): Extension<AppState>, uri: Uri) -> Res
         }
     }
 
-    match &state.index_html {
-        Some(html) => (
-            [(CONTENT_TYPE, "text/html; charset=utf-8")],
-            html.as_ref().as_bytes().to_vec(),
-        )
-            .into_response(),
-        None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    // Read the shell on every request: Vite emits a new hashed bundle name on
+    // each build, so a cached index.html would point at files that no longer
+    // exist after a rebuild.
+    match std::fs::read(Path::new(&state.web_root).join("index.html")) {
+        Ok(html) => ([(CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }
 
@@ -1524,13 +1578,9 @@ async fn main() {
     bootstrap(&store).expect("bootstrap");
     tracing::info!(db = %db_path, "database ready");
 
-    let index_html = std::fs::read_to_string(Path::new(&web_root).join("index.html"))
-        .ok()
-        .map(Arc::new);
     let state = AppState {
         store,
         web_root: web_root.clone(),
-        index_html,
     };
     let extension_state = state.clone();
 

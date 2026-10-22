@@ -101,3 +101,20 @@ count (a holiday week neither adds nor subtracts), and manual
 Retroactive `valid_from` dates are allowed (contract corrections) and audited;
 they intentionally recalculate the past. Editing an existing row is reserved for
 typos.
+
+## Archiving time accounts
+
+Time accounts are archived, not deleted: the punch screen lists only active
+accounts, so the buttons stay limited to current projects, while history,
+statistics, search and exports keep resolving the archived names. Archiving is
+allowed for office and admin (office scoped to its own organisation).
+
+Two accounts are structural and cannot be archived: `ALLGEMEIN` (the primary
+work account, always the first button) and `PAUSE` (the single break account).
+
+An account archived while a timer is running **stays visible on the punch screen
+until that segment is stopped or switched**; the day payload adds the running
+account back even though it is archived. After the segment closes it disappears
+on the next refresh. Archiving never interrupts a running timer.
+
+Deleting remains possible only for accounts without any booked time.

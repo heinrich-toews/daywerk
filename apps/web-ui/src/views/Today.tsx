@@ -245,6 +245,17 @@ export default function Today() {
         </Show>
       </section>
 
+      <Show
+        when={primary()}
+        fallback={
+          <section class="card p-5 text-center">
+            <div class="font-display text-lg font-bold uppercase tracking-wide text-muted">
+              {t("punch.noActiveAccounts")}
+            </div>
+            <div class="mt-1 text-xs text-muted">{t("punch.hint")}</div>
+          </section>
+        }
+      >
       <section class="grid grid-cols-3 gap-2">
         <PunchButton
           label={primary()?.name ?? "ALLGEMEIN"}
@@ -270,6 +281,7 @@ export default function Today() {
           onClick={() => request("stop")}
         />
       </section>
+      </Show>
 
       <section class="space-y-2">
         <Show when={others().length > 0}>

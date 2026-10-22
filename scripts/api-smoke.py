@@ -245,6 +245,84 @@ def main() -> int:
     status, _ = call(f"/api/accounts/{own_account['id']}", admin_token, "DELETE")
     check(status == 409, f"used account is protected ({status})")
 
+    # ---- archiving time accounts ---------------------------------------
+    status, spare = call(
+        "/api/accounts", worker_token, "POST", {"name": "Archiv-Test", "kind": "work"}
+    )
+    check(status == 200, f"create an account to archive ({status})")
+
+    status, _ = call(
+        f"/api/accounts/{spare['id']}", worker_token, "PATCH", {"archived": True}
+    )
+    check(status == 403, f"employee cannot archive an account ({status})")
+
+    status, archived = call(
+        f"/api/accounts/{spare['id']}", tokens["office@test.local"], "PATCH",
+        {"archived": True},
+    )
+    check(
+        status == 200 and archived["archived"] is True,
+        f"office archives an account ({status})",
+    )
+
+    status, day = call("/api/today", worker_token)
+    check(
+        all(a["id"] != spare["id"] for a in day["accounts"]),
+        "archived account disappears from today",
+    )
+
+    primary = next(a for a in day["accounts"] if a["is_primary"])
+    status, _ = call(
+        f"/api/accounts/{primary['id']}", admin_token, "PATCH", {"archived": True}
+    )
+    check(status == 409, f"primary account cannot be archived ({status})")
+
+    brk = next(a for a in day["accounts"] if a["kind"] == "break")
+    status, _ = call(
+        f"/api/accounts/{brk['id']}", admin_token, "PATCH", {"archived": True}
+    )
+    check(status == 409, f"break account cannot be archived ({status})")
+
+    status, restored = call(
+        f"/api/accounts/{spare['id']}", tokens["office@test.local"], "PATCH",
+        {"archived": False},
+    )
+    check(
+        status == 200 and restored["archived"] is False,
+        f"office restores an account ({status})",
+    )
+
+    # an account archived while a timer runs stays visible until the segment ends
+    status, _ = call(
+        "/api/punch", worker_token, "POST",
+        {"action": "start", "account_id": spare["id"]},
+    )
+    status, _ = call(
+        f"/api/accounts/{spare['id']}", tokens["office@test.local"], "PATCH",
+        {"archived": True},
+    )
+    status, day = call("/api/today", worker_token)
+    check(
+        any(a["id"] == spare["id"] for a in day["accounts"]),
+        "archived account stays visible while its timer runs",
+    )
+    check(
+        day["active"]["account_id"] == spare["id"],
+        "the running timer keeps going",
+    )
+
+    status, day = call("/api/punch", worker_token, "POST", {"action": "stop"})
+    check(
+        all(a["id"] != spare["id"] for a in day["accounts"]),
+        "it disappears once the segment is stopped",
+    )
+
+    status, me = call("/api/me", worker_token)
+    check(
+        any(a["id"] == spare["id"] for a in me["accounts"]),
+        "history can still resolve the archived account name",
+    )
+
     # ---- timesheet exports ---------------------------------------------
     status, ctype, body = fetch_raw("/api/export/timesheet.xlsx", worker_token)
     check(status == 403, f"employee cannot export a timesheet ({status})")

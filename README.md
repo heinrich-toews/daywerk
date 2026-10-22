@@ -22,7 +22,9 @@ auditable and impossible to double-book.
 
 - **One exclusive timer** — starting another time account stops the previous one
 - **Default accounts** `ALLGEMEIN` (work) and `PAUSE` (break); anyone can add work accounts
-  right on the punch screen, admins add/archive/delete the rest
+  right on the punch screen, office and admins archive or delete the rest
+- **Archived accounts vanish from the punch screen** so it only lists living projects; an
+  account archived mid-shift stays visible until its running segment ends
 - **Notes and materials** are captured whenever a work segment is closed — switching jobs,
   pausing or stopping — and shown in the history
 - **Stop while paused** deletes the break and ends the work segment when the break began
