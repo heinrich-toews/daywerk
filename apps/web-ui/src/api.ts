@@ -146,6 +146,53 @@ export interface TeamRow {
 }
 
 const TOKEN_KEY = "daywerk.token";
+const SERVER_KEY = "daywerk.server";
+
+/**
+ * The web app is served by the Daywerk server, so relative `/api` paths work.
+ * The native apps are not, so they need an absolute address. It comes from
+ * `VITE_SERVER_URL` at build time (handy for a fixed deployment) and can be
+ * changed at runtime on the login screen or in the settings.
+ */
+const BUILD_SERVER = (import.meta.env["VITE_SERVER_URL"] as string | undefined) ?? "";
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+let serverBase = (readStored(SERVER_KEY) ?? BUILD_SERVER).replace(/\/+$/, "");
+
+export function getServerBase(): string {
+  return serverBase;
+}
+
+/** Point the client at another server. The old session belongs to the old one. */
+export function setServerBase(value: string) {
+  const clean = value.trim().replace(/\/+$/, "");
+  if (clean === serverBase) return;
+  serverBase = clean;
+  try {
+    if (clean) localStorage.setItem(SERVER_KEY, clean);
+    else localStorage.removeItem(SERVER_KEY);
+  } catch {
+    /* private mode */
+  }
+  setToken(null);
+}
+
+function apiUrl(path: string): string {
+  return serverBase ? `${serverBase}${path}` : path;
+}
+
+/** True inside the Tauri shell (Android/iOS/desktop). */
+export const isTauri =
+  typeof window !== "undefined" &&
+  (Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) ||
+    window.location.hostname === "tauri.localhost");
 
 export class ApiError extends Error {
   status: number;
@@ -183,7 +230,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   let res: Response;
   try {
-    res = await fetch(path, { ...init, headers });
+    res = await fetch(apiUrl(path), { ...init, headers });
   } catch {
     throw new ApiError("network", 0);
   }
@@ -379,7 +426,7 @@ export async function downloadTimesheet(
 
   let res: Response;
   try {
-    res = await fetch(`/api/export/timesheet.${kind}${qs(params)}`, { headers });
+    res = await fetch(apiUrl(`/api/export/timesheet.${kind}${qs(params)}`), { headers });
   } catch {
     throw new ApiError("network", 0);
   }

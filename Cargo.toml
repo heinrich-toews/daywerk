@@ -5,6 +5,7 @@ members = [
     "crates/dw-storage",
     "crates/dw-server",
     "crates/dw-export",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]

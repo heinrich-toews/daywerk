@@ -35,6 +35,10 @@ const de = {
   "search.results": "{n} Treffer",
   "common.close": "Schließen",
 
+  "server.title": "Server",
+  "server.url": "Server-Adresse",
+  "server.hint": "Adresse des Daywerk-Servers, z. B. https://time.example.org",
+  "server.save": "Speichern & neu laden",
   "auth.title": "Anmelden",
   "auth.subtitle": "Melde dich an, um deine Arbeitszeit zu stempeln.",
   "auth.email": "E-Mail",
@@ -169,6 +173,10 @@ const en: Record<Key, string> = {
   "search.results": "{n} results",
   "common.close": "Close",
 
+  "server.title": "Server",
+  "server.url": "Server address",
+  "server.hint": "Address of the Daywerk server, e.g. https://time.example.org",
+  "server.save": "Save & reload",
   "auth.title": "Sign in",
   "auth.subtitle": "Sign in to punch your working time.",
   "auth.email": "Email",

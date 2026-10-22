@@ -1,10 +1,11 @@
 import { For, Show, createSignal } from "solid-js";
-import { api } from "../api";
+import { api, getServerBase, isTauri, setServerBase } from "../api";
 import { LANGS, lang, t, type Lang } from "../i18n";
 import { changeLocale, me, refresh, roleAtLeast, setView } from "../state";
 
 export default function Settings() {
   const [name, setName] = createSignal(me()?.user.name ?? "");
+  const [server, setServer] = createSignal(getServerBase());
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [notice, setNotice] = createSignal<string | null>(null);
@@ -28,6 +29,12 @@ export default function Settings() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function saveServer(e: Event) {
+    e.preventDefault();
+    setServerBase(server());
+    window.location.reload();
   }
 
   async function pickLanguage(code: Lang) {
@@ -107,6 +114,31 @@ export default function Settings() {
           {busy() ? t("common.loading") : t("settings.save")}
         </button>
       </form>
+
+      <Show when={isTauri}>
+        <form onSubmit={saveServer} class="card space-y-3 p-4">
+          <h2 class="font-display text-lg font-bold uppercase">{t("server.title")}</h2>
+          <div>
+            <label class="label" for="server-url">
+              {t("server.url")}
+            </label>
+            <input
+              id="server-url"
+              type="url"
+              class="field"
+              inputmode="url"
+              autocomplete="url"
+              placeholder="https://time.example.org"
+              value={server()}
+              onInput={(e) => setServer(e.currentTarget.value)}
+            />
+            <p class="mt-1 text-xs text-muted">{t("server.hint")}</p>
+          </div>
+          <button type="submit" class="btn-primary w-full">
+            {t("server.save")}
+          </button>
+        </form>
+      </Show>
 
       <Show when={roleAtLeast("admin")}>
         <button type="button" class="btn-ghost w-full" onClick={() => setView("admin")}>

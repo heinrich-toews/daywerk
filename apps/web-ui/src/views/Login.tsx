@@ -1,9 +1,10 @@
-import { createSignal } from "solid-js";
-import { ApiError } from "../api";
+import { Show, createSignal } from "solid-js";
+import { ApiError, getServerBase, isTauri, setServerBase } from "../api";
 import { LANGS, lang, setLang, t, type Lang } from "../i18n";
 import { signIn } from "../state";
 
 export default function Login() {
+  const [server, setServer] = createSignal(getServerBase());
   const [email, setEmail] = createSignal("");
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -14,6 +15,8 @@ export default function Login() {
     setBusy(true);
     setError(null);
     try {
+      // The native apps talk to a remote server; the browser uses its origin.
+      if (isTauri) setServerBase(server());
       await signIn(email().trim(), password());
     } catch (err) {
       setError(
@@ -38,6 +41,23 @@ export default function Login() {
         </div>
 
         <form onSubmit={submit} class="card space-y-3 p-5">
+          <Show when={isTauri}>
+            <div>
+              <label class="label" for="server">
+                {t("server.url")}
+              </label>
+              <input
+                id="server"
+                type="url"
+                class="field"
+                inputmode="url"
+                autocomplete="url"
+                placeholder="https://time.example.org"
+                value={server()}
+                onInput={(e) => setServer(e.currentTarget.value)}
+              />
+            </div>
+          </Show>
           <div>
             <label class="label" for="email">
               {t("auth.email")}

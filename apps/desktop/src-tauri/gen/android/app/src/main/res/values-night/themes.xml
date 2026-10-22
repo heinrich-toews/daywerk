@@ -1,0 +1,11 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- The web UI is light, so force a light window and paint the strip behind
+         the (transparent) system bars with the app background colour. -->
+    <style name="Theme.daywerk_desktop" parent="Theme.Material3.Light.NoActionBar">
+        <item name="android:windowBackground">@color/daywerk_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

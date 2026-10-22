@@ -47,7 +47,7 @@ auditable and impossible to double-book.
 | Storage | SQLite (`dw-storage`) via `rusqlite`, migrations through `PRAGMA user_version` |
 | Server | Rust + `axum` (`dw-server`), bearer tokens, Argon2id passwords |
 | Web UI | SolidJS + Tailwind CSS v4 + Vite |
-| Native | Tauri v2 (planned, shares the web UI) |
+| Native | Tauri v2 shell — Android (verified on the Pixel_7 emulator), iOS and desktop share the same web UI |
 
 The architecture follows [OpenChordBook](https://github.com/openchordbook/openchordbook):
 one self-contained binary, one SQLite file, no external services.
@@ -84,6 +84,20 @@ Run the test suite:
 pnpm test                      # Rust workspace + web UI unit tests
 python3 scripts/api-smoke.py   # end-to-end API checks, fresh database
 ```
+
+### Android
+
+```sh
+pnpm android:emulator                                     # Pixel_7
+VITE_SERVER_URL=http://10.0.2.2:9095 \
+  pnpm android:build:debug --target x86_64                 # emulator APK
+adb install -r apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+adb shell am start -n de.twxsoft.daywerk/.MainActivity
+```
+
+The app is a client, so it needs the server address — at build time via
+`VITE_SERVER_URL`, or on the login screen. Details and the Android toolchain
+notes: [docs/android.md](docs/android.md).
 
 ## Configuration
 
@@ -181,7 +195,7 @@ Implemented: domain model and state machine, SQLite storage, REST API, web UI
 roles, balances, notes and materials, German/English, JSON backup, XLSX and PDF
 export, account delete/archive/restore.
 
-Next: Tauri clients with an offline outbox, SMTP for password reset, and editing
+Next: an offline outbox for the native apps, SMTP for password reset, and editing
 the *times* of past segments (notes are already editable).
 
 ## License

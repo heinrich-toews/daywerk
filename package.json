@@ -9,6 +9,13 @@
     "server": "cargo run -p dw-server",
     "test": "cargo test --workspace && pnpm --filter web-ui test",
     "test:ui": "pnpm --filter web-ui test",
-    "test:api": "python3 scripts/api-smoke.py"
+    "test:api": "python3 scripts/api-smoke.py",
+    "desktop:dev": "tauri dev --config apps/desktop/src-tauri/tauri.conf.json",
+    "desktop:build": "tauri build --config apps/desktop/src-tauri/tauri.conf.json",
+    "android:init": "scripts/android.sh init",
+    "android:dev": "scripts/android.sh dev",
+    "android:build": "scripts/android.sh build",
+    "android:build:debug": "scripts/android.sh build --debug --apk",
+    "android:emulator": "scripts/emulator.sh"
   }
 }
