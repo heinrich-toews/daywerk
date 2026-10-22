@@ -142,3 +142,21 @@ exact counts.
 Projects are written by office and admin only; tasks and subtasks are open to
 everyone in the organisation, because the board is shared. Editing a task is
 allowed for its creator, its assignee, office and admin.
+
+## Phone layout
+
+The layout is responsive without a separate mobile build. On screens narrower
+than Tailwind's `sm` (640 px) the world's tabs move from the header into a
+**bottom navigation bar**; on wider screens the header bar stays as it was.
+
+The reason is reach, not taste: on a phone the top bar is only comfortable for
+one hand if the device is held high, and the tab labels at `text-[11px]` with
+`py-1.5` were under the 48 px touch-target minimum. The bottom items are
+full-width thirds/fifths with a 64 px height, an icon plus its label, and a
+2 px active indicator at the top edge — they sit exactly where a right thumb
+rests. The header keeps the organisation, user, world switch, settings and
+logout.
+
+The content area reserves the bar's height (`pb-24` below `sm`), so lists and
+the last card never scroll underneath it. Views without tabs (settings, admin)
+hide the bar on both layouts.

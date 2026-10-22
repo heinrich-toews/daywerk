@@ -96,6 +96,39 @@ export function UsersIcon(props: IconProps): JSX.Element {
   );
 }
 
+export function SearchIcon(props: IconProps): JSX.Element {
+  return (
+    <svg
+      class={props.class ?? base}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
+export function FolderIcon(props: IconProps): JSX.Element {
+  return (
+    <svg
+      class={props.class ?? base}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      aria-hidden="true"
+    >
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+    </svg>
+  );
+}
+
 export function CogIcon(props: IconProps): JSX.Element {
   return (
     <svg

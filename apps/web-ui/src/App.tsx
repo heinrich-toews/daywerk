@@ -1,4 +1,5 @@
 import { For, Match, Show, Switch, onMount } from "solid-js";
+import type { JSX } from "solid-js";
 import {
   boot,
   booting,
@@ -26,19 +27,46 @@ import Settings from "./views/Settings";
 import Admin from "./views/Admin";
 import TaskWorld from "./views/tasks/TaskWorld";
 import { CogIcon, LogoutIcon } from "./components/Icons";
+import { ChartIcon, ClockIcon, FolderIcon, ListIcon, SearchIcon, UsersIcon } from "./components/Icons";
 
-type Tab = { label: string; active: () => boolean; go: () => void };
+type Tab = {
+  label: string;
+  icon: () => JSX.Element;
+  active: () => boolean;
+  go: () => void;
+};
 
 function timeTabs(): Tab[] {
   const list: Tab[] = [
-    { label: t("nav.today"), active: () => view() === "today", go: () => setView("today") },
-    { label: t("nav.history"), active: () => view() === "history", go: () => setView("history") },
-    { label: t("nav.stats"), active: () => view() === "stats", go: () => setView("stats") },
+    {
+      label: t("nav.today"),
+      icon: () => <ClockIcon class="h-6 w-6" />,
+      active: () => view() === "today",
+      go: () => setView("today"),
+    },
+    {
+      label: t("nav.history"),
+      icon: () => <ListIcon class="h-6 w-6" />,
+      active: () => view() === "history",
+      go: () => setView("history"),
+    },
+    {
+      label: t("nav.stats"),
+      icon: () => <ChartIcon class="h-6 w-6" />,
+      active: () => view() === "stats",
+      go: () => setView("stats"),
+    },
   ];
   if (roleAtLeast("office")) {
-    list.push({ label: t("nav.team"), active: () => view() === "team", go: () => setView("team") });
+    list.push({
+      label: t("nav.team"),
+      icon: () => <UsersIcon class="h-6 w-6" />,
+      active: () => view() === "team",
+      go: () => setView("team"),
+    });
     list.push({
       label: t("nav.search"),
+      icon: () => <SearchIcon class="h-6 w-6" />,
       active: () => view() === "search",
       go: () => setView("search"),
     });
@@ -50,35 +78,40 @@ function taskTabs(): Tab[] {
   return [
     {
       label: t("nav.projects"),
+      icon: () => <FolderIcon class="h-6 w-6" />,
       active: () => taskView() === "projects",
       go: () => goTaskView("projects"),
     },
     {
       label: t("nav.tasks"),
+      icon: () => <ListIcon class="h-6 w-6" />,
       active: () => taskView() === "tasks",
       go: () => goTaskView("tasks"),
     },
     {
       label: t("nav.search"),
+      icon: () => <SearchIcon class="h-6 w-6" />,
       active: () => taskView() === "search",
       go: () => goTaskView("search"),
     },
     {
       label: t("nav.stats"),
+      icon: () => <ChartIcon class="h-6 w-6" />,
       active: () => taskView() === "stats",
       go: () => goTaskView("stats"),
     },
   ];
 }
 
-function WorldSwitcher() {
-  const base = "rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors";
+function WorldSwitcher(props: { fill?: boolean }) {
+  const base = "rounded-md text-xs font-semibold uppercase tracking-wide transition-colors";
+  const size = () => (props.fill ? "flex-1 px-3 py-2.5" : "px-3 py-1.5");
   return (
-    <div class="flex rounded-lg border border-line bg-background p-0.5">
+    <div class={`flex rounded-lg border border-line bg-background p-0.5 ${props.fill ? "w-full" : ""}`}>
       <button
         type="button"
         onClick={() => switchWorld("time")}
-        class={`${base} ${
+        class={`${base} ${size()} ${
           world() === "time" ? "bg-primary text-primary-foreground" : "text-muted hover:text-foreground"
         }`}
       >
@@ -87,7 +120,7 @@ function WorldSwitcher() {
       <button
         type="button"
         onClick={() => switchWorld("tasks")}
-        class={`${base} ${
+        class={`${base} ${size()} ${
           world() === "tasks" ? "bg-primary text-primary-foreground" : "text-muted hover:text-foreground"
         }`}
       >
@@ -113,6 +146,44 @@ function TabBar(props: { tabs: Tab[] }) {
               }`}
             >
               {tab.label}
+            </button>
+          )}
+        </For>
+      </div>
+    </nav>
+  );
+}
+
+/**
+ * Phone navigation. Pinned to the bottom of the screen so the tabs sit under
+ * the thumb, with a 64 px target per item (Material's minimum is 48 px).
+ */
+function BottomNav(props: { tabs: Tab[] }) {
+  return (
+    <nav
+      aria-label={t("nav.label")}
+      class="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-card/95 backdrop-blur sm:hidden"
+    >
+      <div class="mx-auto flex max-w-4xl items-stretch">
+        <For each={props.tabs}>
+          {(tab) => (
+            <button
+              type="button"
+              onClick={tab.go}
+              aria-current={tab.active() ? "page" : undefined}
+              class={`relative flex min-h-16 flex-1 flex-col items-center justify-center gap-1 px-1 py-2 transition-colors ${
+                tab.active() ? "text-primary" : "text-muted active:bg-soft"
+              }`}
+            >
+              <span
+                class={`absolute inset-x-4 top-0 h-0.5 rounded-full ${
+                  tab.active() ? "bg-primary" : "bg-transparent"
+                }`}
+              />
+              {tab.icon()}
+              <span class="text-[11px] font-semibold uppercase leading-none tracking-wide">
+                {tab.label}
+              </span>
             </button>
           )}
         </For>
@@ -163,33 +234,39 @@ function Shell() {
               type="button"
               onClick={openSettings}
               title={t("settings.title")}
-              class={`rounded-lg p-2 hover:bg-soft ${
+              class={`rounded-lg p-2.5 hover:bg-soft ${
                 globalView() === "settings" ? "text-primary" : "text-muted hover:text-foreground"
               }`}
             >
-              <CogIcon />
+              <CogIcon class="h-5 w-5" />
             </button>
             <button
               type="button"
               onClick={() => void signOut()}
               title={t("settings.logout")}
-              class="rounded-lg p-2 text-muted hover:bg-soft hover:text-foreground"
+              class="rounded-lg p-2.5 text-muted hover:bg-soft hover:text-foreground"
             >
-              <LogoutIcon />
+              <LogoutIcon class="h-5 w-5" />
             </button>
           </div>
         </div>
 
         <div class="px-4 pb-2 sm:hidden">
-          <WorldSwitcher />
+          <WorldSwitcher fill />
         </div>
 
         <Show when={!inGlobal()}>
-          <TabBar tabs={world() === "time" ? timeTabs() : taskTabs()} />
+          <div class="hidden sm:block">
+            <TabBar tabs={world() === "time" ? timeTabs() : taskTabs()} />
+          </div>
         </Show>
       </header>
 
-      <main class="mx-auto w-full max-w-4xl flex-1 px-4 py-4">
+      <main
+        class={`mx-auto w-full max-w-4xl flex-1 px-4 pt-4 ${
+          inGlobal() ? "pb-4" : "pb-24 sm:pb-4"
+        }`}
+      >
         <Show when={inGlobal()}>
           <button
             type="button"
@@ -231,6 +308,10 @@ function Shell() {
           </Match>
         </Switch>
       </main>
+
+      <Show when={!inGlobal()}>
+        <BottomNav tabs={world() === "time" ? timeTabs() : taskTabs()} />
+      </Show>
     </div>
   );
 }

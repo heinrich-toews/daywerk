@@ -77,8 +77,8 @@ const de = {
   "nav.team": "Team",
   "nav.settings": "Einstellungen",
   "nav.admin": "Verwaltung",
-
   "nav.search": "Suche",
+  "nav.label": "Navigation",
   "note.title": "Notiz für {account}",
   "note.note": "Notiz",
   "note.material": "Material",
@@ -296,8 +296,8 @@ const en: Record<Key, string> = {
   "nav.team": "Team",
   "nav.settings": "Settings",
   "nav.admin": "Admin",
-
   "nav.search": "Search",
+  "nav.label": "Navigation",
   "note.title": "Note for {account}",
   "note.note": "Note",
   "note.material": "Material",
