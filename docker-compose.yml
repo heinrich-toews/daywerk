@@ -11,7 +11,9 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:9095:9095"
+      # Reachable from the reverse proxy on the LAN; the host firewall limits
+      # who may connect.
+      - "9095:9095"
     volumes:
       - ./data:/app/data
     environment:
