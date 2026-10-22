@@ -16,6 +16,11 @@ FROM docker.io/rust:1-bookworm AS rust-builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+# Cargo resolves every workspace member, and the Tauri shell is one of them
+# (its sources are not compiled here, only its manifest is needed).
+COPY apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.toml
+COPY apps/desktop/src-tauri/build.rs apps/desktop/src-tauri/build.rs
+COPY apps/desktop/src-tauri/src/ apps/desktop/src-tauri/src/
 RUN cargo build --release -p dw-server
 
 # ---- Stage 3: runtime --------------------------------------------------
