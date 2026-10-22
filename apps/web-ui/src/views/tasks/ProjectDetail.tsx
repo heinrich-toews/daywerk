@@ -103,9 +103,9 @@ export default function ProjectDetail() {
         {(detail) => (
           <>
             <section class="card p-4">
-              <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0">
-                  <h1 class="truncate font-display text-2xl font-bold uppercase">
+              <div class="flex flex-wrap items-start justify-between gap-2">
+                <div class="min-w-0 flex-1 basis-full sm:basis-0">
+                  <h1 class="font-display text-2xl font-bold uppercase leading-tight">
                     {detail().project.name}
                   </h1>
                   <Show when={detail().project.description}>
