@@ -1,10 +1,10 @@
-import { For, Show, createSignal, onMount } from "solid-js";
-import { api, type Member, type TaskDetail as TaskDetailData } from "../../api";
+import { For, Show, createEffect, createSignal, onMount } from "solid-js";
+import { api, type Member, type Task, type TaskDetail as TaskDetailData } from "../../api";
 import DurationField from "../../components/DurationField";
 import TaskFormSheet from "../../components/TaskFormSheet";
 import { dur, todayIso } from "../../format";
 import { t } from "../../i18n";
-import { closeTask, openTask, openTaskId } from "../../state";
+import { closeTask, me, openProjectId, openSubtask, openTaskId, roleAtLeast, taskPath } from "../../state";
 import {
   deDate,
   effort,
@@ -40,8 +40,12 @@ export default function TaskDetail() {
     }
   }
 
+  createEffect(() => {
+    const id = openTaskId();
+    if (id) void load();
+  });
+
   onMount(() => {
-    void load();
     api.members().then(setMembers).catch(() => setMembers([]));
   });
 
@@ -92,6 +96,32 @@ export default function TaskDetail() {
     setSpentMinutes(null);
   }
 
+  const canEdit = (task: { created_by: string | null; assignee_id: string | null }) => {
+    const user = me()?.user;
+    if (!user) return false;
+    return roleAtLeast("office") || task.created_by === user.id || task.assignee_id === user.id;
+  };
+
+  async function toggleSubtask(subtask: Task) {
+    await run(() =>
+      api.updateTask(subtask.id, {
+        title: subtask.title,
+        description: subtask.description,
+        assignee_id: subtask.assignee_id,
+        start_date: subtask.start_date,
+        due_date: subtask.due_date,
+        priority: subtask.priority,
+        status: subtask.status === "done" ? "open" : "done",
+        estimate_minutes: subtask.estimate_minutes,
+      }),
+    );
+  }
+
+  async function removeSubtask(subtask: { id: string; title: string }) {
+    if (!window.confirm(`${t("tasks.deleteTask")} ${subtask.title}`)) return;
+    await run(() => api.deleteTask(subtask.id));
+  }
+
   async function removeTask() {
     const detail = data();
     if (!detail) return;
@@ -111,7 +141,12 @@ export default function TaskDetail() {
         class="text-xs font-semibold uppercase tracking-wide text-muted hover:text-foreground"
         onClick={closeTask}
       >
-        ← {t("tasks.project")}
+        ←{" "}
+        {taskPath().length > 1
+          ? t("tasks.back")
+          : openProjectId()
+            ? t("tasks.project")
+            : t("nav.tasks")}
       </button>
 
       <Show when={error()}>
@@ -271,22 +306,49 @@ export default function TaskDetail() {
               <div class="divide-y divide-line">
                 <For each={detail().subtasks}>
                   {(subtask) => (
-                    <button
-                      type="button"
-                      class="flex w-full items-center justify-between gap-2 py-1.5 text-left text-sm"
-                      onClick={() => openTask(subtask.id)}
-                    >
-                      <span class={subtask.status === "done" ? "text-muted line-through" : ""}>
+                    <div class="flex items-center gap-2 py-1.5">
+                      <input
+                        type="checkbox"
+                        class="h-5 w-5 shrink-0 accent-primary disabled:opacity-40"
+                        checked={subtask.status === "done"}
+                        disabled={!canEdit(subtask) || busy()}
+                        title={statusLabel(subtask.status)}
+                        onChange={() => void toggleSubtask(subtask)}
+                      />
+                      <button
+                        type="button"
+                        class={`min-w-0 flex-1 truncate text-left text-sm ${
+                          subtask.status === "done" ? "text-muted line-through" : ""
+                        }`}
+                        onClick={() => openSubtask(subtask.id)}
+                      >
                         {subtask.title}
-                      </span>
-                      <span class="text-xs text-muted">
-                        {statusLabel(subtask.status)}
+                      </button>
+                      <span class="shrink-0 text-xs text-muted">
                         <Show when={subtask.estimate_minutes}>
-                          {" · "}
                           {effort(subtask.estimate_minutes)}
                         </Show>
                       </span>
-                    </button>
+                      <button
+                        type="button"
+                        class="rounded px-1 text-xs text-muted hover:text-primary"
+                        title={t("tasks.edit")}
+                        onClick={() => openSubtask(subtask.id)}
+                      >
+                        ✎
+                      </button>
+                      <Show when={canEdit(subtask)}>
+                        <button
+                          type="button"
+                          class="rounded px-1 text-xs text-muted hover:text-danger"
+                          title={t("tasks.delete")}
+                          disabled={busy()}
+                          onClick={() => void removeSubtask(subtask)}
+                        >
+                          ✕
+                        </button>
+                      </Show>
+                    </div>
                   )}
                 </For>
               </div>

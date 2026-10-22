@@ -37,24 +37,36 @@ export const [view, setView] = createSignal<TimeView>("today");
 export const [taskView, setTaskView] = createSignal<TaskView>("projects");
 export const [globalView, setGlobalView] = createSignal<GlobalView | null>(null);
 export const [openProjectId, setOpenProjectId] = createSignal<string | null>(null);
-export const [openTaskId, setOpenTaskId] = createSignal<string | null>(null);
+
+/**
+ * Navigation stack for tasks, so a subtask knows its parent.
+ * `[task]` from a list, `[task, subtask]` when descending.
+ */
+export const [taskPath, setTaskPath] = createSignal<string[]>([]);
+export const openTaskId = () => taskPath().at(-1) ?? null;
 
 export function openProject(id: string) {
   setOpenProjectId(id);
-  setOpenTaskId(null);
+  setTaskPath([]);
 }
 
+/** Open a task from a list: start a fresh path. */
 export function openTask(id: string) {
-  setOpenTaskId(id);
+  setTaskPath([id]);
+}
+
+/** Descend into a subtask: keep the parent on the stack. */
+export function openSubtask(id: string) {
+  setTaskPath((path) => [...path, id]);
 }
 
 export function closeTask() {
-  setOpenTaskId(null);
+  setTaskPath((path) => path.slice(0, -1));
 }
 
 export function closeProject() {
   setOpenProjectId(null);
-  setOpenTaskId(null);
+  setTaskPath([]);
 }
 
 export function goTaskView(next: TaskView) {
