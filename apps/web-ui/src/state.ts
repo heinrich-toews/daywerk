@@ -36,6 +36,31 @@ export const [world, setWorld] = createSignal<World>("time");
 export const [view, setView] = createSignal<TimeView>("today");
 export const [taskView, setTaskView] = createSignal<TaskView>("projects");
 export const [globalView, setGlobalView] = createSignal<GlobalView | null>(null);
+export const [openProjectId, setOpenProjectId] = createSignal<string | null>(null);
+export const [openTaskId, setOpenTaskId] = createSignal<string | null>(null);
+
+export function openProject(id: string) {
+  setOpenProjectId(id);
+  setOpenTaskId(null);
+}
+
+export function openTask(id: string) {
+  setOpenTaskId(id);
+}
+
+export function closeTask() {
+  setOpenTaskId(null);
+}
+
+export function closeProject() {
+  setOpenProjectId(null);
+  setOpenTaskId(null);
+}
+
+export function goTaskView(next: TaskView) {
+  setTaskView(next);
+  closeProject();
+}
 
 /** Switch worlds, leaving the other world on its last view. */
 export function switchWorld(next: World) {

@@ -17,9 +17,12 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, MIGRATION_V2, MIGRATION_V3];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4];
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 pub const EPOCH_DATE: &str = "1970-01-01";
+
+mod tasks;
+pub use tasks::*;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -1510,6 +1513,72 @@ impl Store {
             )?,
         );
         out.insert(
+            "projects".into(),
+            dump(
+                &conn,
+                "projects",
+                &[
+                    "id",
+                    "org_id",
+                    "name",
+                    "description",
+                    "color",
+                    "account_id",
+                    "status",
+                    "created_by",
+                    "created_at",
+                ],
+            )?,
+        );
+        out.insert(
+            "tasks".into(),
+            dump(
+                &conn,
+                "tasks",
+                &[
+                    "id",
+                    "project_id",
+                    "parent_id",
+                    "title",
+                    "description",
+                    "assignee_id",
+                    "start_date",
+                    "due_date",
+                    "priority",
+                    "status",
+                    "estimate_minutes",
+                    "created_by",
+                    "created_at",
+                    "updated_at",
+                    "completed_at",
+                ],
+            )?,
+        );
+        out.insert(
+            "task_comments".into(),
+            dump(
+                &conn,
+                "task_comments",
+                &["id", "task_id", "author_id", "body", "created_at"],
+            )?,
+        );
+        out.insert(
+            "task_time_entries".into(),
+            dump(
+                &conn,
+                "task_time_entries",
+                &[
+                    "id",
+                    "task_id",
+                    "user_id",
+                    "minutes",
+                    "note",
+                    "spent_on",
+                    "created_at",
+                ],
+            )?,
+        );
+        out.insert(
             "workdays".into(),
             dump(
                 &conn,
@@ -1613,6 +1682,10 @@ impl Store {
         let tx = conn.transaction()?;
         tx.execute_batch(
             "DELETE FROM audit_log;
+             DELETE FROM task_time_entries;
+             DELETE FROM task_comments;
+             DELETE FROM tasks;
+             DELETE FROM projects;
              DELETE FROM work_time_models;
              DELETE FROM balance_adjustments;
              DELETE FROM segments;
@@ -1625,7 +1698,7 @@ impl Store {
         )?;
 
         let mut counts = serde_json::Map::new();
-        let tables: [(&str, &[&str]); 8] = [
+        let tables: [(&str, &[&str]); 12] = [
             (
                 "organizations",
                 &[
@@ -1666,6 +1739,56 @@ impl Store {
                     "sort_order",
                     "archived",
                     "is_primary",
+                ],
+            ),
+            (
+                "projects",
+                &[
+                    "id",
+                    "org_id",
+                    "name",
+                    "description",
+                    "color",
+                    "account_id",
+                    "status",
+                    "created_by",
+                    "created_at",
+                ],
+            ),
+            (
+                "tasks",
+                &[
+                    "id",
+                    "project_id",
+                    "parent_id",
+                    "title",
+                    "description",
+                    "assignee_id",
+                    "start_date",
+                    "due_date",
+                    "priority",
+                    "status",
+                    "estimate_minutes",
+                    "created_by",
+                    "created_at",
+                    "updated_at",
+                    "completed_at",
+                ],
+            ),
+            (
+                "task_comments",
+                &["id", "task_id", "author_id", "body", "created_at"],
+            ),
+            (
+                "task_time_entries",
+                &[
+                    "id",
+                    "task_id",
+                    "user_id",
+                    "minutes",
+                    "note",
+                    "spent_on",
+                    "created_at",
                 ],
             ),
             (
@@ -2113,6 +2236,63 @@ SELECT lower(hex(randomblob(16))), u.id, '1970-01-01',
 
 ALTER TABLE users DROP COLUMN daily_target_minutes;
 ALTER TABLE organizations DROP COLUMN daily_target_minutes;"#;
+
+const MIGRATION_V4: &str = r#"CREATE TABLE projects (
+    id          TEXT PRIMARY KEY,
+    org_id      TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    color       TEXT,
+    account_id  TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+    status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+    created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at  INTEGER NOT NULL,
+    UNIQUE (org_id, name)
+);
+CREATE INDEX idx_projects_org ON projects(org_id, status);
+
+CREATE TABLE tasks (
+    id               TEXT PRIMARY KEY,
+    project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    parent_id        TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+    title            TEXT NOT NULL,
+    description      TEXT NOT NULL DEFAULT '',
+    assignee_id      TEXT REFERENCES users(id) ON DELETE SET NULL,
+    start_date       TEXT,
+    due_date         TEXT,
+    priority         TEXT NOT NULL DEFAULT 'normal'
+                       CHECK (priority IN ('low','normal','high','urgent')),
+    status           TEXT NOT NULL DEFAULT 'open'
+                       CHECK (status IN ('open','in_progress','done','cancelled')),
+    estimate_minutes INTEGER,
+    created_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    completed_at     INTEGER
+);
+CREATE INDEX idx_tasks_project ON tasks(project_id, status);
+CREATE INDEX idx_tasks_assignee ON tasks(assignee_id, status);
+CREATE INDEX idx_tasks_parent ON tasks(parent_id);
+
+CREATE TABLE task_comments (
+    id         TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    author_id  TEXT REFERENCES users(id) ON DELETE SET NULL,
+    body       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_task_comments ON task_comments(task_id, created_at);
+
+CREATE TABLE task_time_entries (
+    id         TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    user_id    TEXT REFERENCES users(id) ON DELETE SET NULL,
+    minutes    INTEGER NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    spent_on   TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_task_time ON task_time_entries(task_id, spent_on);"#;
 
 #[cfg(test)]
 mod tests {
@@ -3060,7 +3240,7 @@ mod tests {
         }
 
         let store = Store::open(path.to_str().unwrap()).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(store.schema_version().unwrap(), 4);
         assert_eq!(store.orgs().unwrap().len(), 1, "existing data survives");
 
         // the new columns and the new index are usable
@@ -3089,6 +3269,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(wtm, 1);
+        let task_tables: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'
+                  AND name IN ('projects','tasks','task_comments','task_time_entries')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(task_tables, 4);
         drop(conn);
         drop(store);
         std::fs::remove_file(&path).ok();
@@ -3118,7 +3307,7 @@ mod tests {
         }
 
         let store = Store::open(path.to_str().unwrap()).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(store.schema_version().unwrap(), 4);
 
         // the per-user 600 min/day (50 h/week) survives as a contract
         let models = store.work_time_models("u1").unwrap();

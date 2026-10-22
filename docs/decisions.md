@@ -118,3 +118,27 @@ account back even though it is archived. After the segment closes it disappears
 on the next refresh. Archiving never interrupts a running timer.
 
 Deleting remains possible only for accounts without any booked time.
+
+## Task management
+
+The app has two worlds, chosen in the header: **Zeiterfassung** (the punch clock)
+and **Aufgaben** (projects and tasks). They are deliberately separate: the punch
+world knows nothing about tasks, the task world writes no punch data.
+
+The only bridge is `projects.account_id`. A project may be linked to a time
+account, and then reports the hours booked on that account — read-only, derived
+from segments. This keeps a single timer and a single source of truth for worked
+time.
+
+Task effort is **entered manually**, not measured. Every entry is a row in
+`task_time_entries` (minutes, date, note, author), and the task shows the sum.
+There is no task timer and no `segments.task_id`.
+
+Deleting a project is a hard delete with cascade: tasks, subtasks, comments and
+time entries are removed, and the link to the time account is released. The time
+account and its booked segments survive. The UI asks for confirmation with the
+exact counts.
+
+Projects are written by office and admin only; tasks and subtasks are open to
+everyone in the organisation, because the board is shared. Editing a task is
+allowed for its creator, its assignee, office and admin.

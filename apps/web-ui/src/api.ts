@@ -136,6 +136,122 @@ export interface Stats {
   per_day: { date: string; work_ms: number; break_ms: number }[];
 }
 
+export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskStatus = "open" | "in_progress" | "done" | "cancelled";
+
+export interface Project {
+  id: string;
+  org_id: string;
+  name: string;
+  description: string;
+  color: string | null;
+  account_id: string | null;
+  status: "active" | "archived";
+  created_by: string | null;
+  created_at: number;
+}
+
+export interface ProjectRow extends Project {
+  account_name: string | null;
+  task_count: number;
+  open_count: number;
+  done_count: number;
+  overdue_count: number;
+  estimate_minutes: number;
+  spent_minutes: number;
+  booked_ms: number;
+}
+
+export interface Task {
+  id: string;
+  project_id: string;
+  parent_id: string | null;
+  title: string;
+  description: string;
+  assignee_id: string | null;
+  start_date: string | null;
+  due_date: string | null;
+  priority: TaskPriority;
+  status: TaskStatus;
+  estimate_minutes: number | null;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+}
+
+export interface TaskRow extends Task {
+  project_name: string;
+  assignee_name: string | null;
+  subtask_count: number;
+  done_subtasks: number;
+  spent_minutes: number;
+  comment_count: number;
+}
+
+export interface TaskComment {
+  id: string;
+  task_id: string;
+  author_id: string | null;
+  author_name: string;
+  body: string;
+  created_at: number;
+}
+
+export interface TaskTimeEntry {
+  id: string;
+  task_id: string;
+  user_id: string | null;
+  user_name: string;
+  minutes: number;
+  note: string;
+  spent_on: string;
+  created_at: number;
+}
+
+export interface ProjectDetail {
+  project: ProjectRow;
+  tasks: TaskRow[];
+  accounts: { id: string; name: string; archived: boolean }[];
+}
+
+export interface TaskDetail {
+  task: TaskRow;
+  subtasks: Task[];
+  comments: TaskComment[];
+  time_entries: TaskTimeEntry[];
+}
+
+export interface Member {
+  id: string;
+  name: string;
+}
+
+export interface TaskStatsRow {
+  id: string;
+  name: string;
+  task_count: number;
+  done_count: number;
+  overdue_count: number;
+  estimate_minutes: number;
+  spent_minutes: number;
+  booked_ms: number;
+}
+
+export interface TaskStats {
+  from: string;
+  to: string;
+  total_tasks: number;
+  open_tasks: number;
+  done_tasks: number;
+  overdue_tasks: number;
+  estimate_minutes: number;
+  spent_minutes: number;
+  booked_ms: number;
+  by_project: TaskStatsRow[];
+  by_assignee: TaskStatsRow[];
+}
+
 export interface BookingRow {
   id: string;
   date: string;
@@ -445,6 +561,106 @@ export const api = {
 
   addAdjustment: (body: { user_id: string; date: string; minutes: number; reason?: string }) =>
     request<void>("/api/adjustments", { method: "POST", body: JSON.stringify(body) }),
+
+  members: () => request<Member[]>("/api/members"),
+
+  projects: (includeArchived = false) =>
+    request<ProjectRow[]>(`/api/projects${qs({ include_archived: includeArchived })}`),
+
+  project: (id: string) => request<ProjectDetail>(`/api/projects/${id}`),
+
+  createProject: (body: {
+    name: string;
+    description?: string;
+    color?: string | null;
+    account_id?: string | null;
+  }) => request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
+
+  updateProject: (
+    id: string,
+    body: {
+      name?: string;
+      description?: string;
+      color?: string | null;
+      account_id?: string;
+      status?: "active" | "archived";
+    },
+  ) => request<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  projectDeletePreview: (id: string) =>
+    request<{
+      tasks: number;
+      subtasks: number;
+      comments: number;
+      minutes: number;
+      account_name: string | null;
+    }>(`/api/projects/${id}/preview`),
+
+  deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: "DELETE" }),
+
+  tasks: (params: {
+    project_id?: string;
+    assignee_id?: string;
+    status?: string;
+    priority?: string;
+    q?: string;
+    mine?: boolean;
+    limit?: number;
+  }) => request<TaskRow[]>(`/api/tasks${qs(params)}`),
+
+  task: (id: string) => request<TaskDetail>(`/api/tasks/${id}`),
+
+  createTask: (body: {
+    project_id: string;
+    parent_id?: string | null;
+    title: string;
+    description?: string;
+    assignee_id?: string | null;
+    start_date?: string | null;
+    due_date?: string | null;
+    priority?: TaskPriority;
+    estimate_minutes?: number | null;
+  }) => request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(body) }),
+
+  updateTask: (
+    id: string,
+    body: {
+      title: string;
+      description?: string;
+      assignee_id?: string | null;
+      start_date?: string | null;
+      due_date?: string | null;
+      priority?: TaskPriority;
+      status?: TaskStatus;
+      estimate_minutes?: number | null;
+    },
+  ) => request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  deleteTask: (id: string) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
+
+  addComment: (taskId: string, body: string) =>
+    request<TaskComment>(`/api/tasks/${taskId}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
+
+  deleteComment: (taskId: string, commentId: string) =>
+    request<void>(`/api/tasks/${taskId}/comments/${commentId}`, { method: "DELETE" }),
+
+  addTaskTime: (
+    taskId: string,
+    body: { minutes: number; note?: string; spent_on: string },
+  ) =>
+    request<TaskTimeEntry>(`/api/tasks/${taskId}/time`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  deleteTaskTime: (taskId: string, entryId: string) =>
+    request<void>(`/api/tasks/${taskId}/time/${entryId}`, { method: "DELETE" }),
+
+  taskStats: (from?: string, to?: string) =>
+    request<TaskStats>(`/api/tasks/stats${qs({ from, to })}`),
 
   exportBackup: () => request<unknown>("/api/export"),
 

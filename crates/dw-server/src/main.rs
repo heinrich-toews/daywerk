@@ -21,6 +21,8 @@ use serde_json::json;
 use tower_http::cors::CorsLayer;
 
 use dw_core::{Account, AccountKind, Action, Annotation, Millis, Outcome, Role};
+
+mod api_tasks;
 use dw_storage::{
     Balance, BookingQuery, BookingRow, DayView, EPOCH_DATE, NewUser, Org, Stats, StorageError,
     Store, TeamRow, User, WorkTimeModel,
@@ -1593,6 +1595,42 @@ async fn main() {
         .route("/api/punch", post(punch))
         .route("/api/days", get(days))
         .route("/api/bookings", get(bookings))
+        .route(
+            "/api/projects",
+            get(api_tasks::list_projects).post(api_tasks::create_project),
+        )
+        .route(
+            "/api/projects/{id}",
+            get(api_tasks::get_project)
+                .patch(api_tasks::update_project)
+                .delete(api_tasks::delete_project),
+        )
+        .route(
+            "/api/projects/{id}/preview",
+            get(api_tasks::project_delete_preview),
+        )
+        .route("/api/members", get(api_tasks::list_members))
+        .route(
+            "/api/tasks",
+            get(api_tasks::list_tasks).post(api_tasks::create_task),
+        )
+        .route("/api/tasks/stats", get(api_tasks::task_stats))
+        .route(
+            "/api/tasks/{id}",
+            get(api_tasks::get_task)
+                .patch(api_tasks::update_task)
+                .delete(api_tasks::delete_task),
+        )
+        .route("/api/tasks/{id}/comments", post(api_tasks::add_comment))
+        .route(
+            "/api/tasks/{id}/comments/{comment_id}",
+            axum::routing::delete(api_tasks::delete_comment),
+        )
+        .route("/api/tasks/{id}/time", post(api_tasks::add_time_entry))
+        .route(
+            "/api/tasks/{id}/time/{entry_id}",
+            axum::routing::delete(api_tasks::delete_time_entry),
+        )
         .route("/api/segments/{id}", patch(update_segment))
         .route("/api/stats", get(stats))
         .route("/api/team", get(team))

@@ -3,11 +3,11 @@ import {
   boot,
   booting,
   globalView,
+  goTaskView,
   me,
   openSettings,
   roleAtLeast,
   setGlobalView,
-  setTaskView,
   setView,
   signOut,
   switchWorld,
@@ -51,22 +51,22 @@ function taskTabs(): Tab[] {
     {
       label: t("nav.projects"),
       active: () => taskView() === "projects",
-      go: () => setTaskView("projects"),
+      go: () => goTaskView("projects"),
     },
     {
       label: t("nav.tasks"),
       active: () => taskView() === "tasks",
-      go: () => setTaskView("tasks"),
+      go: () => goTaskView("tasks"),
     },
     {
       label: t("nav.search"),
       active: () => taskView() === "search",
-      go: () => setTaskView("search"),
+      go: () => goTaskView("search"),
     },
     {
       label: t("nav.stats"),
       active: () => taskView() === "stats",
-      go: () => setTaskView("stats"),
+      go: () => goTaskView("stats"),
     },
   ];
 }

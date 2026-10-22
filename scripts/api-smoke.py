@@ -398,6 +398,114 @@ def main() -> int:
         f"balance uses the contract ({me.get('target_minutes')} min)",
     )
 
+    # ---- task management ------------------------------------------------
+    status, me = call("/api/me", worker_token)
+    work_account = next(a for a in me["accounts"] if a["kind"] == "work" and a["is_primary"])
+
+    status, _ = call("/api/projects", worker_token, "POST", {"name": "Mitarbeiter-Projekt"})
+    check(status == 403, f"employee cannot create projects ({status})")
+
+    status, project = call(
+        "/api/projects", tokens["office@test.local"], "POST",
+        {"name": "Badsanierung", "description": "Test", "account_id": work_account["id"]},
+    )
+    check(status == 200 and project["name"] == "Badsanierung", f"office creates a project ({status})")
+
+    status, projects = call("/api/projects", worker_token)
+    linked = next((p for p in projects if p["id"] == project["id"]), None)
+    check(
+        status == 200 and linked is not None and linked["account_name"] is not None,
+        "project list shows the linked time account",
+    )
+
+    status, task = call(
+        "/api/tasks", worker_token, "POST",
+        {"project_id": project["id"], "title": "Fliesen legen", "estimate_minutes": 240},
+    )
+    check(status == 200 and task["status"] == "open", f"employee creates a task ({status})")
+
+    status, sub = call(
+        "/api/tasks", worker_token, "POST",
+        {"project_id": project["id"], "parent_id": task["id"], "title": "Kleber holen"},
+    )
+    check(status == 200, f"employee creates a subtask ({status})")
+
+    status, _ = call(
+        "/api/tasks", worker_token, "POST",
+        {"project_id": project["id"], "parent_id": sub["id"], "title": "Zu tief"},
+    )
+    check(status == 409, f"subtasks cannot be nested further ({status})")
+
+    status, detail = call(f"/api/projects/{project['id']}", worker_token)
+    check(
+        status == 200
+        and len(detail["tasks"]) == 1
+        and detail["tasks"][0]["subtask_count"] == 1,
+        "project detail lists top-level tasks with their subtask count",
+    )
+
+    status, _ = call(
+        f"/api/tasks/{task['id']}/comments", worker_token, "POST",
+        {"body": "Farbe für Müller bestellt"},
+    )
+    check(status == 200, f"comment added ({status})")
+
+    status, found = call("/api/tasks?q=müller", worker_token)
+    check(
+        status == 200 and len(found) == 1,
+        f"task search finds a comment, umlauts fold ({len(found)})",
+    )
+
+    status, _ = call(
+        f"/api/tasks/{task['id']}/time", worker_token, "POST",
+        {"minutes": 90, "note": "vormittags", "spent_on": "2026-10-21"},
+    )
+    check(status == 200, f"manual effort logged ({status})")
+
+    status, detail = call(f"/api/tasks/{task['id']}", worker_token)
+    check(
+        detail["task"]["spent_minutes"] == 90,
+        f"effort is summed on the task ({detail['task']['spent_minutes']} min)",
+    )
+
+    status, updated = call(
+        f"/api/tasks/{task['id']}", worker_token, "PATCH",
+        {"title": "Fliesen legen", "status": "done"},
+    )
+    check(status == 200 and updated["status"] == "done", f"task completed ({status})")
+
+    status, stats = call("/api/tasks/stats", worker_token)
+    check(
+        status == 200
+        and stats["total_tasks"] == 1
+        and stats["done_tasks"] == 1
+        and stats["spent_minutes"] >= 90,
+        "task statistics aggregate tasks and effort",
+    )
+
+    status, _ = call(f"/api/projects/{project['id']}", worker_token, "DELETE")
+    check(status == 403, f"employee cannot delete a project ({status})")
+
+    status, preview = call(
+        f"/api/projects/{project['id']}/preview", tokens["office@test.local"]
+    )
+    check(
+        status == 200 and preview["tasks"] == 2 and preview["account_name"] is not None,
+        "delete preview counts tasks and shows the linked account",
+    )
+
+    status, _ = call(f"/api/projects/{project['id']}", tokens["office@test.local"], "DELETE")
+    check(status == 204, f"office deletes the project ({status})")
+
+    status, _ = call(f"/api/tasks/{task['id']}", worker_token)
+    check(status == 404, f"tasks are gone after deletion ({status})")
+
+    status, me2 = call("/api/me", worker_token)
+    check(
+        any(a["id"] == work_account["id"] for a in me2["accounts"]),
+        "the linked time account survives the project deletion",
+    )
+
     # ---- employee deletion ----------------------------------------------
     status, temp_user = call(
         "/api/users", admin_token, "POST",

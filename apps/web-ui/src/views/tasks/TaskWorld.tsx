@@ -1,30 +1,32 @@
 import { Match, Switch } from "solid-js";
-import { t } from "../../i18n";
-import { taskView } from "../../state";
-
-function Placeholder(props: { title: string; hint: string }) {
-  return (
-    <div class="space-y-4">
-      <h1 class="font-display text-2xl font-bold uppercase tracking-wide">{props.title}</h1>
-      <p class="card p-6 text-center text-sm text-muted">{props.hint}</p>
-    </div>
-  );
-}
+import { openProjectId, openTaskId, taskView } from "../../state";
+import ProjectDetail from "./ProjectDetail";
+import ProjectsView from "./ProjectsView";
+import TaskDetail from "./TaskDetail";
+import TaskListView from "./TaskListView";
+import TaskSearch from "./TaskSearch";
+import TaskStats from "./TaskStats";
 
 export default function TaskWorld() {
   return (
     <Switch>
+      <Match when={openTaskId() !== null}>
+        <TaskDetail />
+      </Match>
+      <Match when={openProjectId() !== null}>
+        <ProjectDetail />
+      </Match>
       <Match when={taskView() === "projects"}>
-        <Placeholder title={t("nav.projects")} hint={t("tasks.placeholder")} />
+        <ProjectsView />
       </Match>
       <Match when={taskView() === "tasks"}>
-        <Placeholder title={t("nav.tasks")} hint={t("tasks.placeholder")} />
+        <TaskListView />
       </Match>
       <Match when={taskView() === "search"}>
-        <Placeholder title={t("nav.search")} hint={t("tasks.placeholder")} />
+        <TaskSearch />
       </Match>
       <Match when={taskView() === "stats"}>
-        <Placeholder title={t("nav.stats")} hint={t("tasks.placeholder")} />
+        <TaskStats />
       </Match>
     </Switch>
   );

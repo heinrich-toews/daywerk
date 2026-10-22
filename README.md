@@ -37,6 +37,11 @@ auditable and impossible to double-book.
 - **German and English UI**, selectable per user
 - **Employee management** — deactivate a leaver (login blocked, balance stays on record) or
   delete an employee that never recorded anything
+- **Task management** in a second app world: projects (office/admin), tasks and
+  subtasks (everyone), assignee, dates, priority, status, comments, search,
+  estimates and manually logged effort
+- **Project ↔ time account** link: a project reports the hours booked on its
+  time account, without mixing the two worlds
 - **Search** across notes and materials, scoped to the office's organisation
 - **XLSX and PDF export** of the timesheet (summary, per day, raw segments with notes)
 - **JSON backup / restore** as a single file
@@ -163,6 +168,15 @@ All endpoints return JSON and take `Authorization: Bearer <token>` except login.
 | `DELETE` | `/api/accounts/{id}` | admin | delete an **unused** account (409 when it has entries) |
 | `PATCH` | `/api/segments/{id}` | own today / office / admin | edit note and material |
 | `GET` | `/api/bookings?q=&from&to&user_id` | office / admin | search notes and materials |
+| `GET` `POST` | `/api/projects` | any / office | projects; write is office+ |
+| `GET` `PATCH` `DELETE` | `/api/projects/{id}` | any / office | project detail, edit, delete (cascades tasks) |
+| `GET` | `/api/projects/{id}/preview` | office | what a delete would remove |
+| `GET` `POST` | `/api/tasks` | any | task list and creation (filters: project, assignee, status, priority, `q`, `mine`) |
+| `GET` `PATCH` `DELETE` | `/api/tasks/{id}` | any / creator, assignee, office | task detail, edit, delete |
+| `POST` `DELETE` | `/api/tasks/{id}/comments[/{cid}]` | any | comments |
+| `POST` `DELETE` | `/api/tasks/{id}/time[/{eid}]` | any | manually logged effort |
+| `GET` | `/api/tasks/stats` | any | task statistics |
+| `GET` | `/api/members` | any | names for the assignee picker |
 | `GET` | `/api/export/timesheet.xlsx` | office / admin | Excel report |
 | `GET` | `/api/export/timesheet.pdf` | office / admin | PDF report |
 | `GET` `PUT` | `/api/org` | any / admin | own organisation |
@@ -177,9 +191,14 @@ All endpoints return JSON and take `Authorization: Bearer <token>` except login.
 organizations ─┬─ users ─┬─ workdays ─┬─ segments ── accounts
                │         │            │
                │         ├─ work_time_models  (contract history, effective-dated)
+               │         ├─ task_time_entries (manual task effort)
                │         └─ balance_adjustments
                ├─ accounts
+               ├─ projects ── tasks ── task_comments
+               │                └─ tasks (one subtask level)
                └─ org_settings
+
+projects.account_id ── accounts.id      ← the only bridge between the worlds
 ```
 
 Timestamps are UTC milliseconds; the day is derived from the organisation's
@@ -203,8 +222,9 @@ Implemented: domain model and state machine, SQLite storage, REST API, web UI
 roles, balances, notes and materials, German/English, JSON backup, XLSX and PDF
 export, account delete/archive/restore.
 
-Next: an offline outbox for the native apps, SMTP for password reset, and editing
-the *times* of past segments (notes are already editable).
+Next: an offline outbox for the native apps, SMTP for password reset, editing the
+*times* of past segments (notes are already editable), and task columns in the
+XLSX/PDF export.
 
 ## License
 
