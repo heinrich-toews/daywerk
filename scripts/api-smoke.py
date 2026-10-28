@@ -9,6 +9,7 @@ Run it against a *fresh* database (the assertions assume no other data):
 Optional: BASE=http://127.0.0.1:9095
 """
 
+import base64
 import json
 import os
 import sys
@@ -51,6 +52,24 @@ def fetch_raw(path, token):
             return res.status, res.headers.get("content-type", ""), res.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.headers.get("content-type", ""), exc.read()
+
+
+def put_bytes(path, token, content_type, data):
+    req = urllib.request.Request(f"{BASE}{quote(path, safe='/?&=')}", data=data, method="PUT")
+    req.add_header("Content-Type", content_type)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req) as res:
+            raw = res.read()
+            return res.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = raw.decode(errors="replace")
+        return exc.code, payload
 
 
 def check(condition, label):
@@ -575,6 +594,60 @@ def main() -> int:
         "Regal aufgefüllt (korrigiert)" in notes,
         "notes survive the JSON backup and restore",
     )
+
+    # ---- organisation branding -----------------------------------------
+    status, fresh_admin = call(
+        "/api/auth/login", method="POST",
+        body={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
+    )
+    admin_token = fresh_admin["token"]
+    status, org = call("/api/org", admin_token)
+    org_id = org["id"]
+
+    status, branding = call("/api/branding")
+    check(
+        status == 200 and branding["name"] and "logo_url" in branding,
+        f"branding is public before login ({status})",
+    )
+    check(branding["logo_url"] is None, "no logo configured yet")
+
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    status, upload = put_bytes(f"/api/orgs/{org_id}/logo", admin_token, "image/png", png)
+    check(status == 200, f"admin uploads a PNG logo ({status})")
+    logo_url = upload["logo_path"]
+    check(
+        bool(logo_url) and logo_url.startswith(f"/api/orgs/{org_id}/logo?v="),
+        "logo URL is versioned for cache busting",
+    )
+
+    status, ctype, body = fetch_raw(logo_url, None)
+    check(
+        status == 200 and ctype.startswith("image/png") and body == png,
+        f"anyone can read the logo ({status}, {ctype})",
+    )
+
+    status, branding = call("/api/branding")
+    check(branding["logo_url"] == logo_url, "branding exposes the uploaded logo")
+
+    status, _ = put_bytes(f"/api/orgs/{org_id}/logo", admin_token, "text/plain", b"hello")
+    check(status == 415, f"non-image upload rejected ({status})")
+
+    status, _ = put_bytes(f"/api/orgs/{org_id}/logo", admin_token, "image/png", b"not a png")
+    check(status == 415, f"wrong image magic rejected ({status})")
+
+    huge = png + b"\0" * (512 * 1024)
+    status, _ = put_bytes(f"/api/orgs/{org_id}/logo", admin_token, "image/png", huge)
+    check(status == 413, f"oversized logo rejected ({status})")
+
+    status, _ = put_bytes(f"/api/orgs/{org_id}/logo", again["token"], "image/png", png)
+    check(status == 403, f"employees cannot set the logo ({status})")
+
+    status, cleared = call(f"/api/orgs/{org_id}/logo", admin_token, "DELETE")
+    check(status == 200 and cleared["logo_path"] is None, f"logo can be removed ({status})")
+    status, _, _ = fetch_raw(f"/api/orgs/{org_id}/logo", None)
+    check(status == 404, f"removed logo returns 404 ({status})")
 
     print("\n".join(results))
     return 0 if all(line.startswith("PASS") for line in results) else 1

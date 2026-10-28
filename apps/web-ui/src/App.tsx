@@ -16,6 +16,7 @@ import {
   view,
   world,
 } from "./state";
+import { assetUrl } from "./api";
 import { t } from "./i18n";
 import Login from "./views/Login";
 import Today from "./views/Today";
@@ -212,9 +213,22 @@ function Shell() {
       <header class="sticky top-0 z-30 border-b border-line bg-card/95 backdrop-blur">
         <div class="mx-auto flex max-w-4xl items-center justify-between gap-2 px-4 py-2">
           <div class="min-w-0">
-            <div class="truncate font-display text-lg font-bold uppercase leading-none tracking-wide">
-              {org()?.name ?? "Daywerk"}
-            </div>
+            <Show
+              when={org()?.logo_path}
+              fallback={
+                <div class="truncate font-display text-lg font-bold uppercase leading-none tracking-wide">
+                  {org()?.name ?? "Daywerk"}
+                </div>
+              }
+            >
+              {(src) => (
+                <img
+                  src={assetUrl(src()) ?? ""}
+                  alt={org()?.name ?? "Daywerk"}
+                  class="h-7 w-auto max-w-[9rem] object-contain sm:max-w-[14rem]"
+                />
+              )}
+            </Show>
             <div class="truncate text-xs text-muted">
               {user()?.name}
               <Show when={user()?.role !== "employee"}>

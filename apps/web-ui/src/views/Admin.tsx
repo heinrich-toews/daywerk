@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal, onMount } from "solid-js";
 import {
   api,
+  assetUrl,
   downloadBackup,
   type Account as TimeAccount,
   type AccountKind,
@@ -152,6 +153,12 @@ export default function Admin() {
   const [editOrgId, setEditOrgId] = createSignal(org().id);
   const [newOrgName, setNewOrgName] = createSignal("");
   const [newOrgSlug, setNewOrgSlug] = createSignal("");
+  const [logoBusy, setLogoBusy] = createSignal(false);
+  const [logoError, setLogoError] = createSignal<string | null>(null);
+  let logoInput: HTMLInputElement | undefined;
+
+  /** The organisation shown in the form (admins may edit any of them). */
+  const selectedOrg = () => orgs().find((o) => o.id === editOrgId()) ?? org();
 
   const [accounts, setAccounts] = createSignal<TimeAccount[]>([]);
   const [accountError, setAccountError] = createSignal<string | null>(null);
@@ -226,6 +233,40 @@ export default function Admin() {
       setOrgNotice(t("settings.saved"));
     } catch (err) {
       setOrgNotice(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function uploadLogo(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    setLogoBusy(true);
+    setLogoError(null);
+    try {
+      await api.uploadOrgLogo(editOrgId(), file);
+      await loadUsers();
+      if (editOrgId() === org().id) await refresh();
+      setOrgNotice(t("settings.saved"));
+    } catch (err) {
+      setLogoError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLogoBusy(false);
+      input.value = "";
+    }
+  }
+
+  async function removeLogo() {
+    setLogoBusy(true);
+    setLogoError(null);
+    try {
+      await api.removeOrgLogo(editOrgId());
+      await loadUsers();
+      if (editOrgId() === org().id) await refresh();
+      setOrgNotice(t("settings.saved"));
+    } catch (err) {
+      setLogoError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLogoBusy(false);
     }
   }
 
@@ -386,6 +427,56 @@ export default function Admin() {
               onInput={(e) => setColorAccent(e.currentTarget.value)}
             />
           </div>
+        </div>
+        <div>
+          <span class="label">{t("admin.logo")}</span>
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="flex h-20 w-48 items-center justify-center rounded-lg border border-line bg-background p-2">
+              <Show
+                when={selectedOrg().logo_path}
+                fallback={<span class="text-xs text-muted">{t("admin.logoNone")}</span>}
+              >
+                {(src) => (
+                  <img
+                    src={assetUrl(src()) ?? ""}
+                    alt=""
+                    class="max-h-16 max-w-full object-contain"
+                  />
+                )}
+              </Show>
+            </div>
+            <div class="flex flex-col gap-2">
+              <input
+                ref={logoInput}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                class="hidden"
+                onChange={uploadLogo}
+              />
+              <button
+                type="button"
+                class="btn-ghost"
+                disabled={logoBusy()}
+                onClick={() => logoInput?.click()}
+              >
+                {selectedOrg().logo_path ? t("admin.logoReplace") : t("admin.logoUpload")}
+              </button>
+              <Show when={selectedOrg().logo_path}>
+                <button
+                  type="button"
+                  class="btn-ghost"
+                  disabled={logoBusy()}
+                  onClick={() => void removeLogo()}
+                >
+                  {t("admin.logoRemove")}
+                </button>
+              </Show>
+            </div>
+          </div>
+          <p class="mt-1 text-xs text-muted">{t("admin.logoHint")}</p>
+          <Show when={logoError()}>
+            <p class="mt-1 text-xs text-danger">{logoError()}</p>
+          </Show>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>

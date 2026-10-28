@@ -35,6 +35,13 @@ export interface Org {
   default_workdays_per_week: number;
 }
 
+export interface Branding {
+  name: string;
+  logo_url: string | null;
+  color_primary: string;
+  color_accent: string;
+}
+
 export interface Segment {
   id: string;
   workday_id: string;
@@ -319,6 +326,19 @@ function apiUrl(path: string): string {
   return serverBase ? `${serverBase}${path}` : path;
 }
 
+/**
+ * Resolve a server-relative asset path (such as the logo) against the
+ * configured server. Absolute URLs and data URLs pass through unchanged, which
+ * keeps an externally hosted logo working.
+ */
+export function assetUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  if (/^(https?:)?\/\//i.test(path) || path.startsWith("data:") || path.startsWith("blob:")) {
+    return path;
+  }
+  return apiUrl(path);
+}
+
 /** True inside the Tauri shell (Android/iOS/desktop). */
 export const isTauri =
   typeof window !== "undefined" &&
@@ -367,6 +387,39 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (res.status === 204) return undefined as T;
+
+  const text = await res.text();
+  let body: unknown = null;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = null;
+    }
+  }
+
+  if (!res.ok) {
+    const message =
+      body && typeof body === "object" && "error" in body
+        ? String((body as { error: unknown }).error)
+        : res.statusText;
+    throw new ApiError(message, res.status);
+  }
+
+  return body as T;
+}
+
+/** PUT a binary body (the logo) and parse the JSON answer. */
+async function putFile<T>(path: string, file: File): Promise<T> {
+  const headers = new Headers({ "Content-Type": file.type || "application/octet-stream" });
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  let res: Response;
+  try {
+    res = await fetch(apiUrl(path), { method: "PUT", headers, body: file });
+  } catch {
+    throw new ApiError("network", 0);
+  }
 
   const text = await res.text();
   let body: unknown = null;
@@ -545,6 +598,12 @@ export const api = {
     default_weekly_hours?: number;
     default_workdays_per_week?: number;
   }) => request<Org>("/api/orgs", { method: "POST", body: JSON.stringify(body) }),
+
+  branding: () => request<Branding>("/api/branding"),
+
+  uploadOrgLogo: (id: string, file: File) => putFile<Org>(`/api/orgs/${id}/logo`, file),
+
+  removeOrgLogo: (id: string) => request<Org>(`/api/orgs/${id}/logo`, { method: "DELETE" }),
 
   updateOrgById: (
     id: string,

@@ -8,8 +8,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::Extension;
+use axum::body::Bytes;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderMap, StatusCode, Uri, header::AUTHORIZATION};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post, put};
@@ -44,6 +45,8 @@ enum ApiError {
     NotFound,
     BadRequest(String),
     Conflict(String),
+    UnsupportedMediaType(String),
+    PayloadTooLarge(String),
     Internal(String),
 }
 
@@ -55,6 +58,8 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
+            ApiError::UnsupportedMediaType(m) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, m),
+            ApiError::PayloadTooLarge(m) => (StatusCode::PAYLOAD_TOO_LARGE, m),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
         };
         (status, Json(json!({ "error": message }))).into_response()
@@ -1072,6 +1077,97 @@ async fn update_org(
     )?))
 }
 
+/// Logos are small images; anything bigger is a mistake, not a design.
+const MAX_LOGO_BYTES: usize = 512 * 1024;
+
+fn logo_magic_ok(mime: &str, bytes: &[u8]) -> bool {
+    match mime {
+        "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+        "image/jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "image/webp" => bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
+/// Branding for the login screen. Unauthenticated on purpose: the user has no
+/// session yet, and the name, colours and logo are public by definition.
+async fn get_branding(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let org = state.store.default_org()?.ok_or(ApiError::NotFound)?;
+    Ok(Json(json!({
+        "name": org.name,
+        "logo_url": org.logo_path,
+        "color_primary": org.color_primary,
+        "color_accent": org.color_accent,
+    })))
+}
+
+async fn get_org_logo(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    let logo = state.store.org_logo(&id)?.ok_or(ApiError::NotFound)?;
+    Ok((
+        [
+            (CONTENT_TYPE, logo.mime),
+            (
+                CACHE_CONTROL,
+                "public, max-age=31536000, immutable".to_string(),
+            ),
+            (X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (ETAG, format!("\"{}\"", logo.updated_at)),
+        ],
+        logo.bytes,
+    )
+        .into_response())
+}
+
+async fn upload_org_logo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    body: Bytes,
+) -> Result<Json<Org>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Admin)?;
+    if state.store.org(&id)?.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    if body.is_empty() {
+        return Err(ApiError::BadRequest("empty logo".into()));
+    }
+    if body.len() > MAX_LOGO_BYTES {
+        return Err(ApiError::PayloadTooLarge(format!(
+            "logo exceeds {} KB",
+            MAX_LOGO_BYTES / 1024
+        )));
+    }
+    let mime = headers
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(';').next().unwrap_or("").trim().to_string())
+        .unwrap_or_default();
+    if !logo_magic_ok(&mime, &body) {
+        return Err(ApiError::UnsupportedMediaType(
+            "logo must be a PNG, JPEG or WebP image".into(),
+        ));
+    }
+    let logo = state.store.set_org_logo(&id, &mime, &body)?;
+    // The version in the URL makes the logo cacheable forever yet replaceable.
+    let url = format!("/api/orgs/{id}/logo?v={}", logo.updated_at);
+    Ok(Json(state.store.set_org_logo_path(&id, Some(&url))?))
+}
+
+async fn delete_org_logo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Org>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Admin)?;
+    state.store.clear_org_logo(&id)?;
+    Ok(Json(state.store.set_org_logo_path(&id, None)?))
+}
+
 async fn update_segment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1650,6 +1746,11 @@ async fn main() {
         .route("/api/org", get(get_org).put(update_org))
         .route("/api/orgs", get(list_orgs).post(create_org))
         .route("/api/orgs/{id}", patch(update_org_by_id))
+        .route(
+            "/api/orgs/{id}/logo",
+            get(get_org_logo).put(upload_org_logo).delete(delete_org_logo),
+        )
+        .route("/api/branding", get(get_branding))
         .route("/api/adjustments", post(add_adjustment))
         .route("/api/export", get(export_backup))
         .route("/api/export/timesheet.xlsx", get(export_xlsx))

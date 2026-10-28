@@ -160,3 +160,30 @@ logout.
 The content area reserves the bar's height (`pb-24` below `sm`), so lists and
 the last card never scroll underneath it. Views without tabs (settings, admin)
 hide the bar on both layouts.
+
+## Branding: colours and logo
+
+An organisation carries a name, two colours and a logo. The colours are CSS
+variables (`--dw-brand`, `--dw-soft`) applied on boot *and* on the login screen;
+the logo is a binary blob in `org_logos`, uploaded by an admin through
+`PUT /api/orgs/{id}/logo` and served from `GET /api/orgs/{id}/logo?v=<upload>`.
+
+Storing the bytes in SQLite (rather than a path on disk) keeps the deployment a
+single writable directory: no upload folder to back up, and no way to point the
+server at an arbitrary file. Images are capped at 512 KB and checked by magic
+bytes (PNG, JPEG, WebP). SVG is refused: it can carry script, and the logo is
+served from the API origin.
+
+`organizations.logo_path` keeps the versioned URL, so every existing `Org`
+response already carries the logo and the client needs no extra lookup. The
+`?v=` suffix lets the browser cache the image indefinitely while a replacement
+is visible immediately.
+
+The login screen is unauthenticated, so it reads the brand from
+`GET /api/branding` (name, colours, logo of the oldest organisation). That is
+also why the brand colours now appear before sign-in. A multi-tenant instance
+shows the oldest organisation on the login page; one deployment per customer is
+the intended shape.
+
+The logo travels inside the JSON backup as base64, so a restore keeps the
+branding. Older backups without the `org_logos` key still import.

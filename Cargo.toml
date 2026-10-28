@@ -21,6 +21,7 @@ serde_json = "1"
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
 dw-core = { path = "crates/dw-core" }
 dw-storage = { path = "crates/dw-storage" }
 dw-export = { path = "crates/dw-export" }

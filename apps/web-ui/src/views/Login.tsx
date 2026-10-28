@@ -1,7 +1,15 @@
-import { Show, createSignal } from "solid-js";
-import { ApiError, getServerBase, isTauri, setServerBase } from "../api";
+import { Show, createEffect, createSignal, onCleanup } from "solid-js";
+import {
+  ApiError,
+  api,
+  assetUrl,
+  getServerBase,
+  isTauri,
+  setServerBase,
+  type Branding,
+} from "../api";
 import { LANGS, lang, setLang, t, type Lang } from "../i18n";
-import { signIn } from "../state";
+import { applyTheme, signIn } from "../state";
 
 export default function Login() {
   const [server, setServer] = createSignal(getServerBase());
@@ -9,6 +17,37 @@ export default function Login() {
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [brand, setBrand] = createSignal<Branding | null>(null);
+  let brandTimer: number | undefined;
+
+  /**
+   * The login screen is unauthenticated, so the brand (name, colours, logo)
+   * comes from a public endpoint. It is optional: if the server is unreachable
+   * or has no logo, the built-in mark stays.
+   */
+  async function loadBranding() {
+    if (isTauri) {
+      const url = server().trim();
+      if (!/^https?:\/\//i.test(url)) return;
+      setServerBase(url);
+    }
+    try {
+      const value = await api.branding();
+      setBrand(value);
+      applyTheme(value);
+    } catch {
+      /* keep the default branding */
+    }
+  }
+
+  // Fetch once on mount and again shortly after the server address changes.
+  createEffect(() => {
+    const address = server();
+    void address;
+    clearTimeout(brandTimer);
+    brandTimer = window.setTimeout(() => void loadBranding(), 300);
+  });
+  onCleanup(() => clearTimeout(brandTimer));
 
   async function submit(e: Event) {
     e.preventDefault();
@@ -33,10 +72,24 @@ export default function Login() {
     <div class="flex min-h-screen items-center justify-center px-4 py-10">
       <div class="w-full max-w-sm space-y-5">
         <div class="text-center">
-          <div class="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-2xl font-bold text-primary-foreground">
-            D
-          </div>
-          <h1 class="font-display text-3xl font-bold uppercase tracking-wide">Daywerk</h1>
+          <Show
+            when={brand()?.logo_url}
+            fallback={
+              <>
+                <div class="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-2xl font-bold text-primary-foreground">
+                  D
+                </div>
+                <h1 class="font-display text-3xl font-bold uppercase tracking-wide">Daywerk</h1>
+              </>
+            }
+          >
+            <img
+              src={assetUrl(brand()?.logo_url) ?? ""}
+              alt={brand()?.name ?? "Daywerk"}
+              class="mx-auto mb-3 h-14 w-auto max-w-[16rem] object-contain"
+            />
+            <h1 class="sr-only">{brand()?.name ?? "Daywerk"}</h1>
+          </Show>
           <p class="mt-1 text-sm text-muted">{t("auth.subtitle")}</p>
         </div>
 

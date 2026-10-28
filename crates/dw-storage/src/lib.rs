@@ -14,10 +14,12 @@ use dw_core::{
     Account, AccountKind, Action, DayStatus, Millis, Plan, Role, Segment, Snapshot, Totals, Workday,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5];
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 pub const EPOCH_DATE: &str = "1970-01-01";
 
@@ -57,6 +59,15 @@ impl Org {
         ((self.default_weekly_hours * 60.0) / self.default_workdays_per_week.max(1) as f64).round()
             as i64
     }
+}
+
+/// A logo uploaded by an administrator. Small binary blob, served publicly so
+/// the login screen can show it before anyone is authenticated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgLogo {
+    pub mime: String,
+    pub bytes: Vec<u8>,
+    pub updated_at: Millis,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,6 +366,74 @@ impl Store {
             ],
         )?;
         self.org(id)?.ok_or(StorageError::NotFound)
+    }
+
+    /// The instance's branding owner: the organisation created first. The
+    /// login screen is unauthenticated, so it can only show one brand.
+    pub fn default_org(&self) -> Result<Option<Org>> {
+        let conn = self.lock();
+        Ok(conn
+            .query_row(
+                "SELECT id, name, slug, logo_path, color_primary, color_accent, timezone, default_weekly_hours, default_workdays_per_week
+                 FROM organizations ORDER BY created_at, id LIMIT 1",
+                [],
+                map_org,
+            )
+            .optional()?)
+    }
+
+    // ---- organisation logos --------------------------------------------
+
+    pub fn set_org_logo(&self, org_id: &str, mime: &str, bytes: &[u8]) -> Result<OrgLogo> {
+        let at = chrono_free_now();
+        self.lock().execute(
+            "INSERT INTO org_logos (org_id, mime, bytes, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(org_id) DO UPDATE SET
+                 mime = excluded.mime,
+                 bytes = excluded.bytes,
+                 updated_at = excluded.updated_at",
+            params![org_id, mime, bytes, at],
+        )?;
+        Ok(OrgLogo {
+            mime: mime.to_string(),
+            bytes: bytes.to_vec(),
+            updated_at: at,
+        })
+    }
+
+    pub fn org_logo(&self, org_id: &str) -> Result<Option<OrgLogo>> {
+        let conn = self.lock();
+        Ok(conn
+            .query_row(
+                "SELECT mime, bytes, updated_at FROM org_logos WHERE org_id = ?1",
+                params![org_id],
+                |r| {
+                    Ok(OrgLogo {
+                        mime: r.get(0)?,
+                        bytes: r.get(1)?,
+                        updated_at: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Returns whether a logo existed.
+    pub fn clear_org_logo(&self, org_id: &str) -> Result<bool> {
+        let removed = self
+            .lock()
+            .execute("DELETE FROM org_logos WHERE org_id = ?1", params![org_id])?;
+        Ok(removed > 0)
+    }
+
+    /// Point `organizations.logo_path` at the uploaded logo (or clear it).
+    pub fn set_org_logo_path(&self, org_id: &str, path: Option<&str>) -> Result<Org> {
+        self.lock().execute(
+            "UPDATE organizations SET logo_path = ?2 WHERE id = ?1",
+            params![org_id, path],
+        )?;
+        self.org(org_id)?.ok_or(StorageError::NotFound)
     }
 
     // ---- users ---------------------------------------------------------
@@ -1478,6 +1557,25 @@ impl Store {
             )?,
         );
         out.insert(
+            "org_logos".into(),
+            {
+                let mut stmt = conn.prepare(
+                    "SELECT org_id, mime, bytes, updated_at FROM org_logos ORDER BY org_id",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok(serde_json::json!({
+                        "org_id": r.get::<_, String>(0)?,
+                        "mime": r.get::<_, String>(1)?,
+                        "data": BASE64.encode(r.get::<_, Vec<u8>>(2)?),
+                        "updated_at": r.get::<_, i64>(3)?,
+                    }))
+                })?;
+                serde_json::Value::Array(
+                    rows.collect::<std::result::Result<Vec<_>, _>>()?,
+                )
+            },
+        );
+        out.insert(
             "users".into(),
             dump(
                 &conn,
@@ -1694,6 +1792,7 @@ impl Store {
              DELETE FROM sessions;
              DELETE FROM users;
              DELETE FROM org_settings;
+             DELETE FROM org_logos;
              DELETE FROM organizations;",
         )?;
 
@@ -1891,6 +1990,39 @@ impl Store {
                 stmt.execute(refs.as_slice())?;
             }
             counts.insert(table.to_string(), serde_json::json!(rows.len()));
+        }
+
+        // Logos are binary, so they are not part of the generic table dump.
+        // Older backups simply have no `org_logos` key.
+        let mut logos = 0usize;
+        if let Some(rows) = obj.get("org_logos").and_then(|v| v.as_array()) {
+            let mut stmt = tx.prepare(
+                "INSERT INTO org_logos (org_id, mime, bytes, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for row in rows {
+                let Some(org_id) = row.get("org_id").and_then(|v| v.as_str()) else {
+                    return Err(StorageError::Import("org_logos entry without org_id".into()));
+                };
+                let Some(mime) = row.get("mime").and_then(|v| v.as_str()) else {
+                    return Err(StorageError::Import("org_logos entry without mime".into()));
+                };
+                let data = row
+                    .get("data")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| StorageError::Import("org_logos entry without data".into()))?;
+                let bytes = BASE64
+                    .decode(data)
+                    .map_err(|e| StorageError::Import(format!("invalid logo data: {e}")))?;
+                let updated_at = row
+                    .get("updated_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                stmt.execute(params![org_id, mime, bytes, updated_at])?;
+                logos += 1;
+            }
+        }
+        if logos > 0 {
+            counts.insert("org_logos".into(), serde_json::json!(logos));
         }
 
         tx.commit()?;
@@ -2293,6 +2425,16 @@ CREATE TABLE task_time_entries (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX idx_task_time ON task_time_entries(task_id, spent_on);"#;
+
+/// Organisation logos live in their own table: small, binary, written rarely
+/// and read by an unauthenticated endpoint (the login screen shows it before
+/// anyone has signed in), so they must not sit in every `organizations` row.
+const MIGRATION_V5: &str = r#"CREATE TABLE org_logos (
+    org_id     TEXT PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+    mime       TEXT NOT NULL,
+    bytes      BLOB NOT NULL,
+    updated_at INTEGER NOT NULL
+);"#;
 
 #[cfg(test)]
 mod tests {
@@ -3240,7 +3382,7 @@ mod tests {
         }
 
         let store = Store::open(path.to_str().unwrap()).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 4);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
         assert_eq!(store.orgs().unwrap().len(), 1, "existing data survives");
 
         // the new columns and the new index are usable
@@ -3307,7 +3449,7 @@ mod tests {
         }
 
         let store = Store::open(path.to_str().unwrap()).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 4);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
 
         // the per-user 600 min/day (50 h/week) survives as a contract
         let models = store.work_time_models("u1").unwrap();
@@ -3337,5 +3479,42 @@ mod tests {
             locale: "de".into(),
         });
         assert!(matches!(err, Err(StorageError::Conflict(_))));
+    }
+
+    #[test]
+    fn org_logo_roundtrip_and_backup() {
+        let (store, org, _) = store();
+        assert!(store.org_logo(&org.id).unwrap().is_none());
+
+        let png = b"\x89PNG\r\n\x1a\nfake-logo";
+        let logo = store.set_org_logo(&org.id, "image/png", png).unwrap();
+        let stored = store.org_logo(&org.id).unwrap().unwrap();
+        assert_eq!(stored.mime, "image/png");
+        assert_eq!(stored.bytes, png);
+        assert_eq!(stored.updated_at, logo.updated_at);
+
+        let path = format!("/api/orgs/{}/logo?v={}", org.id, logo.updated_at);
+        let patched = store.set_org_logo_path(&org.id, Some(&path)).unwrap();
+        assert_eq!(patched.logo_path.as_deref(), Some(path.as_str()));
+
+        // The bytes travel with the JSON backup, even though they are binary.
+        let backup = store.export_json().unwrap();
+        assert_eq!(backup["org_logos"].as_array().unwrap().len(), 1);
+
+        assert!(store.clear_org_logo(&org.id).unwrap());
+        assert!(store.org_logo(&org.id).unwrap().is_none());
+        store.import_json(&backup).unwrap();
+        assert_eq!(store.org_logo(&org.id).unwrap().unwrap().bytes, png);
+
+        // Replacing keeps a single row and the new MIME type.
+        store.set_org_logo(&org.id, "image/webp", b"RIFFxxxxWEBP").unwrap();
+        assert_eq!(store.org_logo(&org.id).unwrap().unwrap().mime, "image/webp");
+
+        let cleared = store
+            .set_org_logo_path(&org.id, None)
+            .unwrap();
+        assert!(cleared.logo_path.is_none());
+        assert!(store.clear_org_logo(&org.id).unwrap());
+        assert!(!store.clear_org_logo(&org.id).unwrap());
     }
 }

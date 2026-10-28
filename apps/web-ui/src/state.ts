@@ -95,7 +95,7 @@ export function roleAtLeast(role: "employee" | "office" | "admin"): boolean {
   return RANK[current] >= RANK[role];
 }
 
-export function applyTheme(org: Org) {
+export function applyTheme(org: Pick<Org, "color_primary" | "color_accent">) {
   const root = document.documentElement;
   if (org.color_primary) root.style.setProperty("--dw-brand", org.color_primary);
   if (org.color_accent) root.style.setProperty("--dw-soft", org.color_accent);

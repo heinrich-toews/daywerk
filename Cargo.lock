@@ -857,6 +857,7 @@ dependencies = [
 name = "dw-storage"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dw-core",
  "rusqlite",
  "serde",
