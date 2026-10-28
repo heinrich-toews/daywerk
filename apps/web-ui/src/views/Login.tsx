@@ -75,19 +75,21 @@ export default function Login() {
           <Show
             when={brand()?.logo_url}
             fallback={
-              <>
+              <div class="mb-3 flex min-h-24 flex-col items-center justify-center">
                 <div class="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-2xl font-bold text-primary-foreground">
                   D
                 </div>
                 <h1 class="font-display text-3xl font-bold uppercase tracking-wide">Daywerk</h1>
-              </>
+              </div>
             }
           >
-            <img
-              src={assetUrl(brand()?.logo_url) ?? ""}
-              alt={brand()?.name ?? "Daywerk"}
-              class="mx-auto mb-3 h-14 w-auto max-w-[16rem] object-contain"
-            />
+            <div class="mb-3 flex min-h-24 items-center justify-center sm:min-h-28">
+              <img
+                src={assetUrl(brand()?.logo_url) ?? ""}
+                alt={brand()?.name ?? "Daywerk"}
+                class="h-24 w-auto max-w-[20rem] object-contain sm:h-28"
+              />
+            </div>
             <h1 class="sr-only">{brand()?.name ?? "Daywerk"}</h1>
           </Show>
           <p class="mt-1 text-sm text-muted">{t("auth.subtitle")}</p>
