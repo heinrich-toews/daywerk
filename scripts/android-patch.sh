@@ -14,7 +14,8 @@
 #                      builds — self-hosted Daywerk servers are usually plain
 #                      HTTP on a LAN.
 # 3. MainActivity.kt   the template enables edge-to-edge but never insets the
-#                      WebView, so the status bar overlaps the app header.
+#                      WebView, so the status bar overlaps the app header; the
+#                      keyboard is an inset too and must shrink the WebView.
 # 4. themes/colors     the web UI is light, so force a light window and paint
 #                      the strip behind the system bars in the app background.
 # 5. build.gradle.kts  release signing, keystore kept outside the repository.
@@ -113,6 +114,25 @@ class MainActivity : TauriActivity() {
   }
 }""",
     "MainActivity insets",
+)
+
+# 3b. MainActivity.kt — the keyboard is an inset too
+patch(
+    activity,
+    """      val bars = insets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+      )
+      view.setPadding(bars.left, bars.top, bars.right, bars.bottom)""",
+    """      val bars = insets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+      )
+      // Edge-to-edge means the window no longer resizes for the keyboard
+      // (adjustResize is a no-op on Android 15+), so the WebView would sit
+      // behind it. Pad by whichever is larger; when the system did resize,
+      // the IME inset is zero and nothing is added twice.
+      val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+      view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))""",
+    "MainActivity IME insets",
 )
 
 # 4. window colours — the web UI is light

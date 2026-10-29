@@ -55,6 +55,13 @@
     cursor: pointer;
   }
 
+  /* While typing, the navigation would float above the keyboard and eat space
+     that the form needs. Chrome supports :has(); older WebViews simply keep
+     the bar. */
+  body:has(input:focus, textarea:focus, select:focus) .bottom-nav {
+    display: none;
+  }
+
   input,
   select,
   textarea {

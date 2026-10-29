@@ -14,7 +14,7 @@ export default function Sheet(props: {
         onClick={props.onClose}
       >
         <div
-          class="w-full max-w-lg rounded-t-2xl bg-card p-4 shadow-xl sm:rounded-2xl"
+          class="max-h-[85dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-t-2xl bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-xl sm:max-h-[85vh] sm:rounded-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           <div class="mb-3 flex items-center justify-between gap-3">

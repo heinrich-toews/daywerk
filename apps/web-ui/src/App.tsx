@@ -163,7 +163,7 @@ function BottomNav(props: { tabs: Tab[] }) {
   return (
     <nav
       aria-label={t("nav.label")}
-      class="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-card/95 backdrop-blur sm:hidden"
+      class="bottom-nav fixed inset-x-0 bottom-0 z-30 border-t border-line bg-card/95 backdrop-blur sm:hidden"
     >
       <div class="mx-auto flex max-w-4xl items-stretch">
         <For each={props.tabs}>
@@ -195,7 +195,7 @@ function BottomNav(props: { tabs: Tab[] }) {
 
 function Splash() {
   return (
-    <div class="flex min-h-screen items-center justify-center">
+    <div class="flex min-h-dvh items-center justify-center">
       <div class="animate-pulse font-display text-2xl font-bold uppercase tracking-widest text-primary">
         Daywerk
       </div>
@@ -209,7 +209,7 @@ function Shell() {
   const inGlobal = () => globalView() !== null;
 
   return (
-    <div class="flex min-h-screen flex-col">
+    <div class="flex h-dvh flex-col overflow-hidden">
       <header class="sticky top-0 z-30 border-b border-line bg-card/95 backdrop-blur">
         <div class="mx-auto flex max-w-4xl items-center justify-between gap-2 px-4 py-2">
           <div class="min-w-0">
@@ -277,7 +277,7 @@ function Shell() {
       </header>
 
       <main
-        class={`mx-auto w-full max-w-4xl flex-1 px-4 pt-4 ${
+        class={`mx-auto w-full max-w-4xl flex-1 overflow-y-auto px-4 pt-4 ${
           inGlobal() ? "pb-4" : "pb-24 sm:pb-4"
         }`}
       >

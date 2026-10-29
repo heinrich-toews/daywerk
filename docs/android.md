@@ -105,17 +105,21 @@ pnpm android:init --ci && scripts/android-patch.sh
 2. **`app/build.gradle.kts`** — `compileSdk`/`targetSdk` pinned from 37 to **36**
    (37 is not in the stable SDK repo), and the release build gets
    `usesCleartextTraffic = true`.
-3. **`MainActivity.kt`** — applies system bar and display-cutout insets to the
-   content view. The template calls `enableEdgeToEdge()` but never insets the
-   WebView, so the status bar overlapped the app header.
+3. **`MainActivity.kt`** — applies system bar, display-cutout **and keyboard**
+   insets to the content view. The template calls `enableEdgeToEdge()` but never
+   insets the WebView, so the status bar overlapped the app header; and since
+   Android 15 `adjustResize` no longer resizes the window, the IME inset is what
+   actually shrinks the WebView when the keyboard opens (without it, bottom
+   sheets and form fields sit behind the keyboard).
 4. **`themes.xml` / `colors.xml`** — the web UI is light, so force a light window
    and paint the strip behind the bars in the app background colour. XML comments
    must not contain `--`.
 5. **`app/build.gradle.kts`** — a `signingConfigs { create("release") }` block
    that reads the keystore described in [Release signing](#release-signing).
-6. **`AndroidManifest.xml`** — `windowSoftInputMode="adjustResize"`. Without it
-   the system pans the window for the on-screen keyboard and the login fields
-   end up underneath it.
+6. **`AndroidManifest.xml`** — `windowSoftInputMode="adjustResize"`, which still
+   helps older devices; on Android 15+ the IME inset in `MainActivity` does the
+   work. The web UI additionally scrolls the focused field into view and hides
+   the bottom navigation while typing.
 
 ## Release signing
 
