@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from "solid-js";
 import { api, getServerBase, isTauri, setServerBase } from "../api";
+import { setSound, setVibration, soundEnabled, vibrationEnabled } from "../feedback";
 import { LANGS, lang, t, type Lang } from "../i18n";
 import { changeLocale, me, refresh, roleAtLeast, setGlobalView } from "../state";
 
@@ -114,6 +115,29 @@ export default function Settings() {
           {busy() ? t("common.loading") : t("settings.save")}
         </button>
       </form>
+
+      <section class="card space-y-3 p-4">
+        <h2 class="font-display text-lg font-bold uppercase">{t("settings.feedback")}</h2>
+        <label class="flex items-center justify-between gap-3">
+          <span class="text-sm">{t("settings.vibration")}</span>
+          <input
+            type="checkbox"
+            class="h-5 w-5 accent-[var(--dw-brand)]"
+            checked={vibrationEnabled()}
+            onChange={(e) => setVibration(e.currentTarget.checked)}
+          />
+        </label>
+        <label class="flex items-center justify-between gap-3">
+          <span class="text-sm">{t("settings.sound")}</span>
+          <input
+            type="checkbox"
+            class="h-5 w-5 accent-[var(--dw-brand)]"
+            checked={soundEnabled()}
+            onChange={(e) => setSound(e.currentTarget.checked)}
+          />
+        </label>
+        <p class="text-xs text-muted">{t("settings.feedbackHint")}</p>
+      </section>
 
       <Show when={isTauri}>
         <form onSubmit={saveServer} class="card space-y-3 p-4">

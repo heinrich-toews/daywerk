@@ -5,6 +5,7 @@ import { Pause, Play, Stop } from "../components/Icons";
 import NoteSheet from "../components/NoteSheet";
 import Sheet from "../components/Sheet";
 import { balanceClass, dur, durSeconds, longDate, timeOfDay } from "../format";
+import { tap } from "../feedback";
 import { locale, t } from "../i18n";
 import { punch, refresh, reloadToday, today, todayReceivedAt } from "../state";
 
@@ -147,6 +148,8 @@ export default function Today() {
    * Closing a break (resuming or stopping while paused) needs no note.
    */
   function request(action: "start" | "pause" | "stop", accountId?: string) {
+    // Answer the tap immediately, before the server round trip.
+    void tap(action === "stop" ? "medium" : "light");
     const a = active();
     if (a && a.kind === "work") {
       setPending({

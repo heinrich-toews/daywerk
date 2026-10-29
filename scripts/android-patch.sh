@@ -17,6 +17,9 @@
 #                      WebView, so the status bar overlaps the app header.
 # 4. themes/colors     the web UI is light, so force a light window and paint
 #                      the strip behind the system bars in the app background.
+# 5. build.gradle.kts  release signing, keystore kept outside the repository.
+# 6. AndroidManifest   resize the window for the keyboard instead of panning it,
+#                      so focused login fields stay visible.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -60,12 +63,12 @@ patch(
 gradle = gen / "app/build.gradle.kts"
 patch(gradle, "compileSdk = 37", "compileSdk = 36", "compileSdk")
 patch(gradle, "targetSdk = 37", "targetSdk = 36", "targetSdk")
+# `optimization {` exists only in the release block, so this stays idempotent
+# even after the signing patch below has inserted its own line.
 patch(
     gradle,
-    """        getByName("release") {
-            optimization {""",
-    """        getByName("release") {
-            // Self-hosted servers are usually plain HTTP on a LAN.
+    """            optimization {""",
+    """            // Self-hosted servers are usually plain HTTP on a LAN.
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             optimization {""",
     "release cleartext",
@@ -144,6 +147,14 @@ theme = """<resources xmlns:tools="http://schemas.android.com/tools">
 (gen / "app/src/main/res/values/themes.xml").write_text(theme)
 (gen / "app/src/main/res/values-night/themes.xml").write_text(theme)
 
+
+# 6. AndroidManifest — shrink the window for the on-screen keyboard
+patch(
+    gen / "app/src/main/AndroidManifest.xml",
+    'android:configChanges="orientation',
+    'android:windowSoftInputMode="adjustResize"\n            android:configChanges="orientation',
+    "windowSoftInputMode",
+)
 
 # 5. release signing — keystore stays outside the repository
 gradle = gen / "app/build.gradle.kts"

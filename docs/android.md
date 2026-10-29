@@ -97,7 +97,7 @@ the hand patches. After re-running it, apply them again:
 pnpm android:init --ci && scripts/android-patch.sh
 ```
 
-`scripts/android-patch.sh` is idempotent and does five things:
+`scripts/android-patch.sh` is idempotent and does six things:
 
 1. **`BuildTask.kt`** — the Gradle `rust` task runs `pnpm tauri …`, which needs a
    local CLI install. This repo uses the global CLI, so the executable becomes
@@ -113,6 +113,9 @@ pnpm android:init --ci && scripts/android-patch.sh
    must not contain `--`.
 5. **`app/build.gradle.kts`** — a `signingConfigs { create("release") }` block
    that reads the keystore described in [Release signing](#release-signing).
+6. **`AndroidManifest.xml`** — `windowSoftInputMode="adjustResize"`. Without it
+   the system pans the window for the on-screen keyboard and the login fields
+   end up underneath it.
 
 ## Release signing
 
@@ -191,3 +194,7 @@ app is published to Google Play.
   emptying `dist/`.
 - WebView devtools: open `chrome://inspect` in Chrome on the host and select the
   `de.twxsoft.daywerk` webview.
+- Punch buttons give haptic feedback (`tauri-plugin-haptics`, vibration on by
+  default) and an optional tone, both per device under *Einstellungen →
+  Feedback*. The permission comes from the plugin's manifest; nothing to patch.
+  The emulator cannot vibrate, so this can only be checked on a real phone.

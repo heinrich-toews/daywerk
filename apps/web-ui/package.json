@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@tauri-apps/plugin-haptics": "^2.4.2",
     "solid-js": "^1.9.15"
   },
   "devDependencies": {

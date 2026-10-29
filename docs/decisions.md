@@ -117,7 +117,12 @@ until that segment is stopped or switched**; the day payload adds the running
 account back even though it is archived. After the segment closes it disappears
 on the next refresh. Archiving never interrupts a running timer.
 
-Deleting remains possible only for accounts without any booked time.
+Deleting an account is always possible — except the two structural ones — and
+it destroys the account's bookings. The segments go, days that are left without
+any segment go too (unless they carry a note, which is history of its own), and
+the audit log records the name, the number of entries and the duration. The UI
+asks first and shows exactly what would be lost, from
+`GET /api/accounts/{id}/usage`; archiving stays the non-destructive option.
 
 ## Task management
 

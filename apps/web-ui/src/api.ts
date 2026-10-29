@@ -35,6 +35,22 @@ export interface Org {
   default_workdays_per_week: number;
 }
 
+/** What a time account still holds, for the delete warning. */
+export interface AccountUsage {
+  entries: number;
+  work_ms: number;
+  first_date: string | null;
+  last_date: string | null;
+}
+
+/** What deleting an account removed. */
+export interface AccountDeletion {
+  name: string;
+  entries: number;
+  work_ms: number;
+  days_removed: number;
+}
+
 export interface Branding {
   name: string;
   logo_url: string | null;
@@ -554,8 +570,10 @@ export const api = {
 
   accounts: (orgId?: string) => request<Account[]>(`/api/accounts${qs({ org_id: orgId })}`),
 
+  accountUsage: (id: string) => request<AccountUsage>(`/api/accounts/${id}/usage`),
+
   deleteAccount: (id: string) =>
-    request<void>(`/api/accounts/${id}`, { method: "DELETE" }),
+    request<AccountDeletion>(`/api/accounts/${id}`, { method: "DELETE" }),
 
   createAccount: (body: {
     name: string;

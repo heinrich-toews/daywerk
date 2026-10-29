@@ -1343,25 +1343,59 @@ async fn update_work_time_model(
     Ok(Json(model))
 }
 
+/// Numbers for the delete warning: how much would be lost.
+async fn account_usage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Office)?;
+    let account = state.store.account(&id)?.ok_or(ApiError::NotFound)?;
+    if actor.role != Role::Admin && account.org_id != actor.org_id {
+        return Err(ApiError::Forbidden);
+    }
+    let usage = state.store.account_usage(&id)?;
+    Ok(Json(json!({
+        "entries": usage.entries,
+        "work_ms": usage.work_ms,
+        "first_date": usage.first_date,
+        "last_date": usage.last_date,
+    })))
+}
+
+/// Deleting an account removes its bookings too. The client asks first and
+/// shows the counts from `account_usage`; the audit log keeps what was lost.
 async fn delete_account(
     State(state): State<AppState>,
     headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let actor = require_auth(&state, &headers)?;
     require_role(&actor, Role::Admin)?;
     let account = state.store.account(&id)?.ok_or(ApiError::NotFound)?;
-    state.store.delete_account(&id)?;
+    let deleted = state.store.delete_account(&id)?;
     let _ = state.store.audit(
         &account.org_id,
         &actor.id,
         "account_deleted",
         "account",
         &id,
-        "{}",
+        &json!({
+            "name": deleted.name,
+            "entries": deleted.entries,
+            "work_ms": deleted.work_ms,
+            "days_removed": deleted.days_removed,
+        })
+        .to_string(),
         now_ms(),
     );
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(json!({
+        "name": deleted.name,
+        "entries": deleted.entries,
+        "work_ms": deleted.work_ms,
+        "days_removed": deleted.days_removed,
+    })))
 }
 
 fn fmt_hm(ms: Millis, tz_name: &str) -> String {
@@ -1743,6 +1777,7 @@ async fn main() {
             "/api/accounts/{id}",
             patch(update_account).delete(delete_account),
         )
+        .route("/api/accounts/{id}/usage", get(account_usage))
         .route("/api/org", get(get_org).put(update_org))
         .route("/api/orgs", get(list_orgs).post(create_org))
         .route("/api/orgs/{id}", patch(update_org_by_id))

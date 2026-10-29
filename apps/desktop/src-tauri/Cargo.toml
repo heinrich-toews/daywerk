@@ -14,5 +14,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-haptics = "2"
 serde.workspace = true
 serde_json.workspace = true

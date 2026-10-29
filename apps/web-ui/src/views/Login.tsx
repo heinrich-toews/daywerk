@@ -49,6 +49,15 @@ export default function Login() {
   });
   onCleanup(() => clearTimeout(brandTimer));
 
+  /**
+   * The on-screen keyboard shrinks the viewport on Android and covers the
+   * focused field on iOS. Wait for the resize, then centre the field.
+   */
+  function keepVisible(e: FocusEvent) {
+    const field = e.currentTarget as HTMLElement;
+    window.setTimeout(() => field.scrollIntoView({ block: "center", behavior: "smooth" }), 280);
+  }
+
   async function submit(e: Event) {
     e.preventDefault();
     setBusy(true);
@@ -69,7 +78,7 @@ export default function Login() {
   }
 
   return (
-    <div class="flex min-h-screen items-center justify-center px-4 py-10">
+    <div class="flex min-h-dvh items-start justify-center overflow-y-auto px-4 py-8 sm:items-center sm:py-10">
       <div class="w-full max-w-sm space-y-5">
         <div class="text-center">
           <Show
@@ -110,6 +119,7 @@ export default function Login() {
                 placeholder="https://time.example.org"
                 value={server()}
                 onInput={(e) => setServer(e.currentTarget.value)}
+                onFocus={keepVisible}
               />
             </div>
           </Show>
@@ -125,6 +135,7 @@ export default function Login() {
               required
               value={email()}
               onInput={(e) => setEmail(e.currentTarget.value)}
+              onFocus={keepVisible}
             />
           </div>
           <div>
@@ -139,6 +150,7 @@ export default function Login() {
               required
               value={password()}
               onInput={(e) => setPassword(e.currentTarget.value)}
+              onFocus={keepVisible}
             />
           </div>
 

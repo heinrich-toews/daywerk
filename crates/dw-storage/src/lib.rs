@@ -173,6 +173,24 @@ pub struct BookingQuery<'a> {
     pub offset: i64,
 }
 
+/// What a time account still holds. Used to warn before deleting it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountUsage {
+    pub entries: i64,
+    pub work_ms: Millis,
+    pub first_date: Option<String>,
+    pub last_date: Option<String>,
+}
+
+/// What deleting an account actually removed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountDeletion {
+    pub name: String,
+    pub entries: i64,
+    pub work_ms: Millis,
+    pub days_removed: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountTotal {
     pub account_id: String,
@@ -745,7 +763,36 @@ impl Store {
     ///
     /// Accounts with booked time and the two structural accounts (primary and
     /// break) are refused: history must not disappear because of a click.
-    pub fn delete_account(&self, id: &str) -> Result<()> {
+    /// What the account holds, for the delete warning.
+    pub fn account_usage(&self, id: &str) -> Result<AccountUsage> {
+        let conn = self.lock();
+        let (entries, work_ms) = conn.query_row(
+            "SELECT count(*),
+                    coalesce(sum(CASE WHEN ended_at IS NOT NULL THEN ended_at - started_at ELSE 0 END), 0)
+               FROM segments WHERE account_id = ?1",
+            params![id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Millis>(1)?)),
+        )?;
+        let (first_date, last_date) = conn.query_row(
+            "SELECT min(w.date), max(w.date)
+               FROM segments s JOIN workdays w ON w.id = s.workday_id
+              WHERE s.account_id = ?1",
+            params![id],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+        )?;
+        Ok(AccountUsage {
+            entries,
+            work_ms,
+            first_date,
+            last_date,
+        })
+    }
+
+    /// Delete an account together with everything booked on it.
+    ///
+    /// The two structural accounts are the exception: the punch screen is built
+    /// around `ALLGEMEIN` and `PAUSE`, and archiving keeps their history.
+    pub fn delete_account(&self, id: &str) -> Result<AccountDeletion> {
         let account = self.account(id)?.ok_or(StorageError::NotFound)?;
         if account.is_primary {
             return Err(StorageError::Conflict(
@@ -757,22 +804,50 @@ impl Store {
                 "the break account cannot be deleted".into(),
             ));
         }
-        let used: i64 = {
-            let conn = self.lock();
-            conn.query_row(
-                "SELECT count(*) FROM segments WHERE account_id = ?1",
-                params![id],
-                |r| r.get(0),
-            )?
+
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let (entries, work_ms) = tx.query_row(
+            "SELECT count(*),
+                    coalesce(sum(CASE WHEN ended_at IS NOT NULL THEN ended_at - started_at ELSE 0 END), 0)
+               FROM segments WHERE account_id = ?1",
+            params![id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Millis>(1)?)),
+        )?;
+
+        // Remember the days before the segments disappear.
+        let mut days: Vec<String> = {
+            let mut stmt =
+                tx.prepare("SELECT DISTINCT workday_id FROM segments WHERE account_id = ?1")?;
+            let rows = stmt.query_map(params![id], |r| r.get::<_, String>(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
         };
-        if used > 0 {
-            return Err(StorageError::Conflict(format!(
-                "account has {used} entries; archive it instead"
-            )));
+
+        tx.execute("DELETE FROM segments WHERE account_id = ?1", params![id])?;
+
+        // A day that only held this account's bookings is gone with it — unless
+        // it carries a note, which is history of its own.
+        let mut days_removed = 0i64;
+        let mut stmt = tx.prepare(
+            "DELETE FROM workdays
+              WHERE id = ?1
+                AND coalesce(note, '') = ''
+                AND NOT EXISTS (SELECT 1 FROM segments WHERE workday_id = ?1)",
+        )?;
+        for day in days.drain(..) {
+            days_removed += stmt.execute(params![day])? as i64;
         }
-        self.lock()
-            .execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
-        Ok(())
+        drop(stmt);
+
+        tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+        tx.commit()?;
+
+        Ok(AccountDeletion {
+            name: account.name,
+            entries,
+            work_ms,
+            days_removed,
+        })
     }
 
     /// Create `ALLGEMEIN` (primary work account) and `PAUSE` (the break account)
@@ -2993,7 +3068,7 @@ mod tests {
     }
 
     #[test]
-    fn used_accounts_are_protected_from_deletion() {
+    fn used_accounts_are_deleted_with_their_bookings() {
         let (store, org, user) = store();
         let account = store
             .create_account(&org.id, "Kunde", AccountKind::Work, None, 100, false)
@@ -3013,12 +3088,19 @@ mod tests {
             .punch(&user, &Action::Stop, NOW + 60_000, DATE, "test")
             .unwrap();
 
-        let err = store.delete_account(&account.id);
-        assert!(matches!(err, Err(StorageError::Conflict(_))));
-        assert!(
-            store.account(&account.id).unwrap().is_some(),
-            "account kept"
-        );
+        let deleted = store.delete_account(&account.id).unwrap();
+        assert_eq!(deleted.entries, 1);
+        assert_eq!(deleted.days_removed, 1, "the day held nothing else");
+        assert!(store.account(&account.id).unwrap().is_none());
+        let left: i64 = store
+            .lock()
+            .query_row(
+                "SELECT count(*) FROM segments WHERE account_id = ?1",
+                params![&account.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "bookings went with the account");
     }
 
     #[test]
@@ -3516,5 +3598,162 @@ mod tests {
         assert!(cleared.logo_path.is_none());
         assert!(store.clear_org_logo(&org.id).unwrap());
         assert!(!store.clear_org_logo(&org.id).unwrap());
+    }
+
+    #[test]
+    fn deleting_an_account_removes_its_bookings_and_emptied_days() {
+        let (store, org, user) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let work = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Work)
+            .unwrap();
+        let lager = store
+            .create_account(&org.id, "Lager", AccountKind::Work, None, 100, false)
+            .unwrap();
+
+        let hour = 3_600_000;
+        let day = 86_400_000;
+
+        // Day 1: only Lager.
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: lager.id.clone(),
+                },
+                NOW,
+                "2026-10-20",
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(&user, &Action::Stop, NOW + hour, "2026-10-20", "test")
+            .unwrap();
+
+        // Day 2: ALLGEMEIN and Lager share the day.
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: work.id.clone(),
+                },
+                NOW + day,
+                "2026-10-21",
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(&user, &Action::Stop, NOW + day + hour, "2026-10-21", "test")
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: lager.id.clone(),
+                },
+                NOW + day + 2 * hour,
+                "2026-10-21",
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Stop,
+                NOW + day + 3 * hour,
+                "2026-10-21",
+                "test",
+            )
+            .unwrap();
+
+        // Day 3: only Lager, but the day has a note.
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: lager.id.clone(),
+                },
+                NOW + 2 * day,
+                "2026-10-22",
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Stop,
+                NOW + 2 * day + hour,
+                "2026-10-22",
+                "test",
+            )
+            .unwrap();
+        store
+            .lock()
+            .execute(
+                "UPDATE workdays SET note = 'Inventur' WHERE date = '2026-10-22'",
+                [],
+            )
+            .unwrap();
+
+        let usage = store.account_usage(&lager.id).unwrap();
+        assert_eq!(usage.entries, 3);
+        assert_eq!(usage.work_ms, 3 * hour);
+        assert_eq!(usage.first_date.as_deref(), Some("2026-10-20"));
+        assert_eq!(usage.last_date.as_deref(), Some("2026-10-22"));
+
+        let deleted = store.delete_account(&lager.id).unwrap();
+        assert_eq!(deleted.name, "Lager");
+        assert_eq!(deleted.entries, 3);
+        assert_eq!(deleted.work_ms, 3 * hour);
+        // 2026-10-20 is gone; 2026-10-21 keeps ALLGEMEIN, 2026-10-22 keeps its note.
+        assert_eq!(deleted.days_removed, 1);
+        assert!(store.account(&lager.id).unwrap().is_none());
+
+        let count = |date: &str| -> i64 {
+            store
+                .lock()
+                .query_row(
+                    "SELECT count(*) FROM workdays WHERE date = ?1",
+                    params![date],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(count("2026-10-20"), 0);
+        assert_eq!(count("2026-10-21"), 1);
+        assert_eq!(count("2026-10-22"), 1);
+        let left: i64 = store
+            .lock()
+            .query_row(
+                "SELECT count(*) FROM segments WHERE workday_id = (SELECT id FROM workdays WHERE date = '2026-10-22')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0);
+        let note: String = store
+            .lock()
+            .query_row(
+                "SELECT note FROM workdays WHERE date = '2026-10-22'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(note, "Inventur");
+
+        // Structural accounts stay protected.
+        assert!(matches!(
+            store.delete_account(&work.id),
+            Err(StorageError::Conflict(_))
+        ));
+        let brk = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Break)
+            .unwrap();
+        assert!(matches!(
+            store.delete_account(&brk.id),
+            Err(StorageError::Conflict(_))
+        ));
     }
 }

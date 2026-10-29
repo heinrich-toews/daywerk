@@ -259,10 +259,40 @@ def main() -> int:
     check(status == 200, f"create a throwaway account ({status})")
     status, _ = call(f"/api/accounts/{temp['id']}", worker_token, "DELETE")
     check(status == 403, f"employee cannot delete accounts ({status})")
-    status, _ = call(f"/api/accounts/{temp['id']}", admin_token, "DELETE")
-    check(status == 204, f"admin deletes an unused account ({status})")
-    status, _ = call(f"/api/accounts/{own_account['id']}", admin_token, "DELETE")
-    check(status == 409, f"used account is protected ({status})")
+    status, deleted = call(f"/api/accounts/{temp['id']}", admin_token, "DELETE")
+    check(
+        status == 200 and deleted["entries"] == 0,
+        f"admin deletes an unused account ({status})",
+    )
+
+    # An account with bookings can be deleted; the bookings go with it.
+    status, doomed = call(
+        "/api/accounts", worker_token, "POST", {"name": "Wegwerf", "kind": "work"}
+    )
+    check(status == 200, f"create an account with bookings ({status})")
+    status, _ = call(
+        "/api/punch", worker_token, "POST",
+        {"action": "start", "account_id": doomed["id"]},
+    )
+    check(status == 200, f"book on the new account ({status})")
+    status, _ = call("/api/punch", worker_token, "POST", {"action": "stop"})
+    check(status == 200, f"close the booking ({status})")
+
+    status, usage = call(f"/api/accounts/{doomed['id']}/usage", admin_token)
+    check(
+        status == 200 and usage["entries"] == 1 and usage["first_date"],
+        f"usage reports the bookings first ({status}, {usage.get('entries')})",
+    )
+    status, removed = call(f"/api/accounts/{doomed['id']}", admin_token, "DELETE")
+    check(
+        status == 200 and removed["entries"] == 1 and removed["name"] == "Wegwerf",
+        f"used account is deleted with its bookings ({status})",
+    )
+    status, _ = call(f"/api/accounts/{doomed['id']}/usage", admin_token)
+    check(status == 404, f"deleted account is gone ({status})")
+
+    status, _ = call(f"/api/accounts/{work['id']}", admin_token, "DELETE")
+    check(status == 409, f"primary account stays protected ({status})")
 
     # ---- archiving time accounts ---------------------------------------
     status, spare = call(

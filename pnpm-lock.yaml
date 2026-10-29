@@ -10,6 +10,9 @@ importers:
 
   apps/web-ui:
     dependencies:
+      '@tauri-apps/plugin-haptics':
+        specifier: ^2.4.2
+        version: 2.4.2
       solid-js:
         specifier: ^1.9.15
         version: 1.9.17
@@ -330,6 +333,12 @@ packages:
     resolution: {integrity: sha512-yYU8cogLeSh/ms2jh8Fj7jaba/EWa7Ja6GoUqYZaraEuCI5YS6ms6ObZgjjedm+jm6XZjdNRWBpPP6Z86oOxcw==}
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
+
+  '@tauri-apps/api@2.12.4':
+    resolution: {integrity: sha512-pVmfis+4zT8H0Qhp3xPZx9Ju7kpzvA6rr/PSJPyuwfvucTQ8sVt61NYU9KMkK703UFlYadFmjKA4HhybOtN0gg==}
+
+  '@tauri-apps/plugin-haptics@2.4.2':
+    resolution: {integrity: sha512-ddoEZuUWxJORcZE6AzeRUEHx4WljV9X4gXU+r08pTfX5YTwGMTIoJcLzMV9WHZIWJVWthktKAolLVaedbZ4dhA==}
 
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -1129,6 +1138,12 @@ snapshots:
       '@tailwindcss/oxide': 4.3.3
       tailwindcss: 4.3.3
       vite: 8.3.4(jiti@2.7.0)
+
+  '@tauri-apps/api@2.12.4': {}
+
+  '@tauri-apps/plugin-haptics@2.4.2':
+    dependencies:
+      '@tauri-apps/api': 2.12.4
 
   '@types/babel__core@7.20.5':
     dependencies:

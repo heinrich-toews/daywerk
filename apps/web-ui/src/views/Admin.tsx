@@ -5,6 +5,7 @@ import {
   downloadBackup,
   type Account as TimeAccount,
   type AccountKind,
+  type AccountUsage,
   type Org,
   type Role,
   type User,
@@ -12,6 +13,7 @@ import {
 import { dur } from "../format";
 import { t } from "../i18n";
 import { me, refresh, signOut } from "../state";
+import Sheet from "../components/Sheet";
 import WorkTimeModelSheet from "../components/WorkTimeModelSheet";
 
 function UserRow(props: {
@@ -155,6 +157,11 @@ export default function Admin() {
   const [newOrgSlug, setNewOrgSlug] = createSignal("");
   const [logoBusy, setLogoBusy] = createSignal(false);
   const [logoError, setLogoError] = createSignal<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = createSignal<TimeAccount | null>(null);
+  const [deleteUsage, setDeleteUsage] = createSignal<AccountUsage | null>(null);
+  const [deleteBusy, setDeleteBusy] = createSignal(false);
+  const [deleteError, setDeleteError] = createSignal<string | null>(null);
+  const [accountNotice, setAccountNotice] = createSignal<string | null>(null);
   let logoInput: HTMLInputElement | undefined;
 
   /** The organisation shown in the form (admins may edit any of them). */
@@ -318,18 +325,57 @@ export default function Admin() {
     }
   }
 
-  async function removeAccount(account: TimeAccount) {
-    if (!window.confirm(`${t("admin.delete")}: ${account.name}?`)) return;
+  /** Ask first: show how much time would disappear with the account. */
+  async function openDelete(account: TimeAccount) {
     setAccountError(null);
+    setAccountNotice(null);
+    setDeleteError(null);
+    setDeleteUsage(null);
+    setDeleteTarget(account);
     try {
-      await api.deleteAccount(account.id);
+      setDeleteUsage(await api.accountUsage(account.id));
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function confirmDelete() {
+    const account = deleteTarget();
+    if (!account) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      const result = await api.deleteAccount(account.id);
+      setDeleteTarget(null);
+      setAccountNotice(
+        result.entries > 0
+          ? t("admin.deleteAccountDone", { name: result.name, entries: result.entries })
+          : t("admin.deleteAccountDoneEmpty", { name: result.name }),
+      );
       await loadAccounts();
       if (editOrgId() === org().id) await refresh();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setAccountError(
-        message.toLowerCase().includes("entries") ? t("admin.deleteUsed") : message,
-      );
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  async function archiveInstead() {
+    const account = deleteTarget();
+    if (!account) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await api.updateAccount(account.id, { archived: true });
+      setDeleteTarget(null);
+      setAccountNotice(t("admin.deleteAccountArchived", { name: account.name }));
+      await loadAccounts();
+      if (editOrgId() === org().id) await refresh();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -592,7 +638,7 @@ export default function Admin() {
                   <button
                     type="button"
                     class="rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/10"
-                    onClick={() => void removeAccount(account)}
+                    onClick={() => void openDelete(account)}
                   >
                     {t("admin.delete")}
                   </button>
@@ -627,7 +673,7 @@ export default function Admin() {
                   <button
                     type="button"
                     class="rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/10"
-                    onClick={() => void removeAccount(account)}
+                    onClick={() => void openDelete(account)}
                   >
                     {t("admin.delete")}
                   </button>
@@ -639,6 +685,10 @@ export default function Admin() {
 
         <Show when={accountError()}>
           {(message) => <p class="text-sm font-medium text-danger">{message()}</p>}
+        </Show>
+
+        <Show when={accountNotice()}>
+          {(message) => <p class="text-sm font-medium text-ok">{message()}</p>}
         </Show>
 
         <form onSubmit={addAccount} class="flex flex-wrap items-end gap-2">
@@ -764,6 +814,80 @@ export default function Admin() {
           {(message) => <p class="text-sm font-medium text-ok">{message()}</p>}
         </Show>
       </section>
+
+      <Sheet
+        open={deleteTarget() !== null}
+        title={t("admin.deleteAccountTitle")}
+        onClose={() => {
+          if (!deleteBusy()) setDeleteTarget(null);
+        }}
+      >
+        <Show when={deleteTarget()}>
+          {(account) => (
+            <div class="space-y-4">
+              <Show
+                when={deleteUsage()}
+                fallback={<p class="text-sm text-muted">{t("common.loading")}</p>}
+              >
+                {(usage) => (
+                  <Show
+                    when={usage().entries > 0}
+                    fallback={
+                      <p class="text-sm">
+                        {t("admin.deleteAccountEmpty", { name: account().name })}
+                      </p>
+                    }
+                  >
+                    <p class="text-sm">
+                      {t("admin.deleteAccountWarning", {
+                        name: account().name,
+                        entries: usage().entries,
+                        time: dur(usage().work_ms),
+                      })}
+                    </p>
+                    <p class="text-sm font-semibold text-danger">
+                      {t("admin.deleteAccountIrreversible")}
+                    </p>
+                  </Show>
+                )}
+              </Show>
+
+              <Show when={deleteError()}>
+                {(message) => <p class="text-sm font-medium text-danger">{message()}</p>}
+              </Show>
+
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="btn-ghost flex-1"
+                  disabled={deleteBusy()}
+                  onClick={() => setDeleteTarget(null)}
+                >
+                  {t("common.cancel")}
+                </button>
+                <Show when={(deleteUsage()?.entries ?? 0) > 0 && !account().archived}>
+                  <button
+                    type="button"
+                    class="btn-ghost flex-1"
+                    disabled={deleteBusy()}
+                    onClick={() => void archiveInstead()}
+                  >
+                    {t("admin.archive")}
+                  </button>
+                </Show>
+                <button
+                  type="button"
+                  class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-danger px-4 py-2.5 font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
+                  disabled={deleteBusy() || !deleteUsage()}
+                  onClick={() => void confirmDelete()}
+                >
+                  {deleteBusy() ? t("common.loading") : t("admin.delete")}
+                </button>
+              </div>
+            </div>
+          )}
+        </Show>
+      </Sheet>
     </div>
   );
 }
