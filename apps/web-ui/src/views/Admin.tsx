@@ -348,9 +348,11 @@ export default function Admin() {
       const result = await api.deleteAccount(account.id);
       setDeleteTarget(null);
       setAccountNotice(
-        result.entries > 0
-          ? t("admin.deleteAccountDone", { name: result.name, entries: result.entries })
-          : t("admin.deleteAccountDoneEmpty", { name: result.name }),
+        result.entries === 0
+          ? t("admin.deleteAccountDoneEmpty", { name: result.name })
+          : result.entries === 1
+            ? t("admin.deleteAccountDoneOne", { name: result.name })
+            : t("admin.deleteAccountDone", { name: result.name, entries: result.entries }),
       );
       await loadAccounts();
       if (editOrgId() === org().id) await refresh();
@@ -839,11 +841,16 @@ export default function Admin() {
                     }
                   >
                     <p class="text-sm">
-                      {t("admin.deleteAccountWarning", {
-                        name: account().name,
-                        entries: usage().entries,
-                        time: dur(usage().work_ms),
-                      })}
+                      {t(
+                        usage().entries === 1
+                          ? "admin.deleteAccountWarningOne"
+                          : "admin.deleteAccountWarning",
+                        {
+                          name: account().name,
+                          entries: usage().entries,
+                          time: dur(usage().work_ms),
+                        },
+                      )}
                     </p>
                     <p class="text-sm font-semibold text-danger">
                       {t("admin.deleteAccountIrreversible")}
