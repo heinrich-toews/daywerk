@@ -6,6 +6,7 @@ import {
   type Account as TimeAccount,
   type AccountKind,
   type AccountUsage,
+  type OrgContents,
   type Org,
   type Role,
   type User,
@@ -162,6 +163,12 @@ export default function Admin() {
   const [deleteBusy, setDeleteBusy] = createSignal(false);
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
   const [accountNotice, setAccountNotice] = createSignal<string | null>(null);
+  const [contents, setContents] = createSignal<OrgContents | null>(null);
+  const [purgeTarget, setPurgeTarget] = createSignal<"bookings" | "tasks" | null>(null);
+  const [purgeWord, setPurgeWord] = createSignal("");
+  const [purgeBusy, setPurgeBusy] = createSignal(false);
+  const [purgeError, setPurgeError] = createSignal<string | null>(null);
+  const [purgeNotice, setPurgeNotice] = createSignal<string | null>(null);
   let logoInput: HTMLInputElement | undefined;
 
   /** The organisation shown in the form (admins may edit any of them). */
@@ -191,11 +198,20 @@ export default function Admin() {
     }
   }
 
+  async function loadContents() {
+    try {
+      setContents(await api.orgContents(editOrgId()));
+    } catch {
+      setContents(null);
+    }
+  }
+
   // Accounts belong to the organisation selected above.
   createEffect(() => {
     const id = editOrgId();
     void id;
     void loadAccounts();
+    void loadContents();
   });
 
   async function loadUsers() {
@@ -378,6 +394,53 @@ export default function Admin() {
       setDeleteError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeleteBusy(false);
+    }
+  }
+
+  function openPurge(what: "bookings" | "tasks") {
+    setPurgeWord("");
+    setPurgeError(null);
+    setPurgeNotice(null);
+    setPurgeTarget(what);
+  }
+
+  async function confirmPurge() {
+    const what = purgeTarget();
+    if (!what) return;
+    // Diacritics are easy to lose on a phone keyboard ("LOSCHEN"), so compare
+    // the words without them.
+    const normalise = (value: string) =>
+      value
+        .trim()
+        .toUpperCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/ß/g, "SS");
+    if (normalise(purgeWord()) !== normalise(t("admin.purgeWord"))) {
+      setPurgeError(t("admin.purgeConfirmWrong"));
+      return;
+    }
+    setPurgeBusy(true);
+    setPurgeError(null);
+    try {
+      const result = await api.purgeOrg(editOrgId(), what);
+      setPurgeTarget(null);
+      setPurgeNotice(
+        what === "bookings"
+          ? result.bookings === 1
+            ? t("admin.purgeDoneBookingsOne")
+            : t("admin.purgeDoneBookings", { entries: result.bookings })
+          : result.tasks === 1
+            ? t("admin.purgeDoneTasksOne")
+            : t("admin.purgeDoneTasks", { tasks: result.tasks }),
+      );
+      await loadContents();
+      await loadUsers();
+      if (editOrgId() === org().id) await refresh();
+    } catch (err) {
+      setPurgeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPurgeBusy(false);
     }
   }
 
@@ -587,6 +650,41 @@ export default function Admin() {
           {t("settings.save")}
         </button>
       </form>
+
+      <section class="card space-y-3 border-danger/40 p-4">
+        <h2 class="font-display text-lg font-bold uppercase text-danger">
+          {t("admin.danger")}
+        </h2>
+        <p class="text-xs text-muted">{t("admin.dangerHint")}</p>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            class="rounded-lg border border-danger/40 px-3 py-2 text-sm font-semibold text-danger hover:bg-danger/10"
+            disabled={!contents() || contents()!.bookings === 0}
+            onClick={() => openPurge("bookings")}
+          >
+            {t("admin.purgeBookings", { entries: contents()?.bookings ?? 0 })}
+          </button>
+          <button
+            type="button"
+            class="rounded-lg border border-danger/40 px-3 py-2 text-sm font-semibold text-danger hover:bg-danger/10"
+            disabled={!contents() || contents()!.tasks === 0}
+            onClick={() => openPurge("tasks")}
+          >
+            {t("admin.purgeTasks", { tasks: contents()?.tasks ?? 0 })}
+          </button>
+        </div>
+        <p class="text-xs text-muted">
+          {t("admin.dangerCounts", {
+            bookings: contents()?.bookings ?? 0,
+            days: contents()?.days ?? 0,
+            projects: contents()?.projects ?? 0,
+          })}
+        </p>
+        <Show when={purgeNotice()}>
+          {(message) => <p class="text-sm font-medium text-ok">{message()}</p>}
+        </Show>
+      </section>
 
       <form onSubmit={addOrg} class="card space-y-3 p-4">
         <h2 class="font-display text-lg font-bold uppercase">{t("admin.newOrg")}</h2>
@@ -816,6 +914,67 @@ export default function Admin() {
           {(message) => <p class="text-sm font-medium text-ok">{message()}</p>}
         </Show>
       </section>
+
+      <Sheet
+        open={purgeTarget() !== null}
+        title={
+          purgeTarget() === "tasks"
+            ? t("admin.purgeTasksTitle")
+            : t("admin.purgeBookingsTitle")
+        }
+        onClose={() => {
+          if (!purgeBusy()) setPurgeTarget(null);
+        }}
+      >
+        <div class="space-y-3">
+          <p class="text-sm">
+            {purgeTarget() === "tasks"
+              ? t("admin.purgeTasksWarning", {
+                  projects: contents()?.projects ?? 0,
+                  tasks: contents()?.tasks ?? 0,
+                })
+              : t("admin.purgeBookingsWarning", {
+                  entries: contents()?.bookings ?? 0,
+                  days: contents()?.days ?? 0,
+                })}
+          </p>
+          <p class="text-sm font-semibold text-danger">{t("admin.purgeIrreversible")}</p>
+          <div>
+            <label class="label" for="purge-word">
+              {t("admin.purgeConfirmLabel")}
+            </label>
+            <input
+              id="purge-word"
+              class="field"
+              autocomplete="off"
+              placeholder={t("admin.purgeWord")}
+              value={purgeWord()}
+              onInput={(e) => setPurgeWord(e.currentTarget.value)}
+            />
+          </div>
+          <Show when={purgeError()}>
+            {(message) => <p class="text-sm font-medium text-danger">{message()}</p>}
+          </Show>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="btn-ghost flex-1"
+              disabled={purgeBusy()}
+              onClick={() => setPurgeTarget(null)}
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-danger px-4 py-2.5 font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
+              disabled={purgeBusy()}
+              onClick={() => void confirmPurge()}
+            >
+              {purgeBusy() ? t("common.loading") : t("admin.delete")}
+            </button>
+          </div>
+        </div>
+      </Sheet>
 
       <Sheet
         open={deleteTarget() !== null}

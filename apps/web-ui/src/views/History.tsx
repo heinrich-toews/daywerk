@@ -1,6 +1,8 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
 import { api, type DayView as DayViewData, type Segment } from "../api";
 import NoteSheet from "../components/NoteSheet";
+import Sheet from "../components/Sheet";
+import { TrashIcon } from "../components/Icons";
 import {
   balanceClass,
   dur,
@@ -21,6 +23,8 @@ export default function History() {
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
   const [editing, setEditing] = createSignal<Editing | null>(null);
+  const [deleting, setDeleting] = createSignal<{ segment: Segment; date: string } | null>(null);
+  const [deleteBusy, setDeleteBusy] = createSignal(false);
 
   async function load(f: string, until: string) {
     setLoading(true);
@@ -49,6 +53,30 @@ export default function History() {
     if (user.role === "admin" || user.role === "office") return true;
     return segment.user_id === user.id && date === todayIso();
   };
+
+  /** Admins and office may remove any booking; employees only their own. */
+  const canDelete = (segment: Segment) => {
+    const user = me()?.user;
+    if (!user) return false;
+    if (user.role === "admin" || user.role === "office") return true;
+    return segment.user_id === user.id;
+  };
+
+  async function confirmDelete() {
+    const target = deleting();
+    if (!target) return;
+    setDeleteBusy(true);
+    setError(null);
+    try {
+      await api.deleteSegment(target.segment.id);
+      setDeleting(null);
+      await load(from(), to());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   async function saveNote(note: string, material: string) {
     const current = editing();
@@ -162,6 +190,18 @@ export default function History() {
                                   ✎
                                 </button>
                               </Show>
+                              <Show when={canDelete(segment)}>
+                                <button
+                                  type="button"
+                                  class="rounded px-1 text-muted hover:bg-card hover:text-danger"
+                                  title={t("history.deleteBooking")}
+                                  onClick={() =>
+                                    setDeleting({ segment, date: entry.day.date })
+                                  }
+                                >
+                                  <TrashIcon class="h-4 w-4" />
+                                </button>
+                              </Show>
                             </span>
                           </div>
                           <Show when={segment.note}>
@@ -214,6 +254,56 @@ export default function History() {
           />
         )}
       </Show>
+
+      <Sheet
+        open={deleting() !== null}
+        title={t("history.deleteBooking")}
+        onClose={() => {
+          if (!deleteBusy()) setDeleting(null);
+        }}
+      >
+        <Show when={deleting()}>
+          {(target) => (
+            <div class="space-y-4">
+              <p class="text-sm">
+                <b>{accountName(target().segment.account_id)}</b> ·{" "}
+                {longDate(target().date, locale())} ·{" "}
+                {timeOfDay(target().segment.started_at, locale())}–
+                {target().segment.ended_at
+                  ? timeOfDay(target().segment.ended_at!, locale())
+                  : "…"}{" "}
+                (
+                {dur(
+                  (target().segment.ended_at ?? target().segment.started_at) -
+                    target().segment.started_at,
+                )}
+                )
+              </p>
+              <p class="text-sm font-semibold text-danger">
+                {t("history.deleteWarning")}
+              </p>
+              <div class="flex gap-2">
+                <button
+                  type="button"
+                  class="btn-ghost flex-1"
+                  disabled={deleteBusy()}
+                  onClick={() => setDeleting(null)}
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-danger px-4 py-2.5 font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
+                  disabled={deleteBusy()}
+                  onClick={() => void confirmDelete()}
+                >
+                  {deleteBusy() ? t("common.loading") : t("admin.delete")}
+                </button>
+              </div>
+            </div>
+          )}
+        </Show>
+      </Sheet>
     </div>
   );
 }

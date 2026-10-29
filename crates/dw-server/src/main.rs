@@ -1168,6 +1168,127 @@ async fn delete_org_logo(
     Ok(Json(state.store.set_org_logo_path(&id, None)?))
 }
 
+/// Delete one booking. Mirrors the edit rules: admins may delete anything,
+/// office any booking of their organisation, employees only their own.
+async fn delete_segment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    let segment = state.store.segment(&id)?.ok_or(ApiError::NotFound)?;
+    let owner = state
+        .store
+        .user(&segment.user_id)?
+        .ok_or(ApiError::NotFound)?;
+    let allowed = match actor.role {
+        Role::Admin => true,
+        Role::Office => owner.org_id == actor.org_id,
+        Role::Employee => owner.id == actor.id,
+    };
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    let date = state
+        .store
+        .workday_by_id(&segment.workday_id)?
+        .map(|day| day.date);
+    let deleted = state.store.delete_segment(&id)?;
+    let _ = state.store.audit(
+        &owner.org_id,
+        &actor.id,
+        "segment_deleted",
+        "segment",
+        &id,
+        &json!({
+            "user": owner.name,
+            "account_id": deleted.account_id,
+            "date": date,
+            "started_at": deleted.started_at,
+            "ended_at": deleted.ended_at,
+        })
+        .to_string(),
+        now_ms(),
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Counts behind the "clean up" panel, so the warning can be concrete.
+async fn org_contents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Admin)?;
+    if state.store.org(&id)?.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    let counts = state.store.org_contents(&id)?;
+    Ok(Json(json!({
+        "bookings": counts.bookings,
+        "days": counts.days,
+        "projects": counts.projects,
+        "tasks": counts.tasks,
+    })))
+}
+
+#[derive(Deserialize)]
+struct PurgeRequest {
+    what: String,
+}
+
+/// Destructive clean-up of one organisation: all bookings or all tasks.
+/// Only an administrator may do this, and it is always audited.
+async fn purge_org(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<PurgeRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let actor = require_auth(&state, &headers)?;
+    require_role(&actor, Role::Admin)?;
+    let org = state.store.org(&id)?.ok_or(ApiError::NotFound)?;
+    let counts = match req.what.as_str() {
+        "bookings" => state.store.purge_bookings(&id)?,
+        "tasks" => state.store.purge_tasks(&id)?,
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "unknown cleanup target: {other}"
+            )));
+        }
+    };
+    let _ = state.store.audit(
+        &id,
+        &actor.id,
+        "org_purged",
+        "org",
+        &id,
+        &json!({
+            "what": req.what,
+            "bookings": counts.bookings,
+            "days": counts.days,
+            "projects": counts.projects,
+            "tasks": counts.tasks,
+        })
+        .to_string(),
+        now_ms(),
+    );
+    tracing::warn!(
+        org = %org.slug,
+        what = %req.what,
+        bookings = counts.bookings,
+        tasks = counts.tasks,
+        "organisation data purged"
+    );
+    Ok(Json(json!({
+        "bookings": counts.bookings,
+        "days": counts.days,
+        "projects": counts.projects,
+        "tasks": counts.tasks,
+    })))
+}
+
 async fn update_segment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1761,7 +1882,10 @@ async fn main() {
             "/api/tasks/{id}/time/{entry_id}",
             axum::routing::delete(api_tasks::delete_time_entry),
         )
-        .route("/api/segments/{id}", patch(update_segment))
+        .route(
+            "/api/segments/{id}",
+            patch(update_segment).delete(delete_segment),
+        )
         .route("/api/stats", get(stats))
         .route("/api/team", get(team))
         .route("/api/users", get(list_users).post(create_user))
@@ -1786,6 +1910,8 @@ async fn main() {
             get(get_org_logo).put(upload_org_logo).delete(delete_org_logo),
         )
         .route("/api/branding", get(get_branding))
+        .route("/api/orgs/{id}/contents", get(org_contents))
+        .route("/api/orgs/{id}/purge", post(purge_org))
         .route("/api/adjustments", post(add_adjustment))
         .route("/api/export", get(export_backup))
         .route("/api/export/timesheet.xlsx", get(export_xlsx))

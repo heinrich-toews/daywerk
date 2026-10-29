@@ -182,6 +182,15 @@ pub struct AccountUsage {
     pub last_date: Option<String>,
 }
 
+/// Counts for the admin "clean up" panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrgContents {
+    pub bookings: i64,
+    pub days: i64,
+    pub projects: i64,
+    pub tasks: i64,
+}
+
 /// What deleting an account actually removed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountDeletion {
@@ -452,6 +461,82 @@ impl Store {
             params![org_id, path],
         )?;
         self.org(org_id)?.ok_or(StorageError::NotFound)
+    }
+
+    // ---- deleting bookings ---------------------------------------------
+
+    /// Delete a single booking. A day that is left without bookings goes with
+    /// it, unless it carries a note.
+    pub fn delete_segment(&self, id: &str) -> Result<Segment> {
+        let segment = self.segment(id)?.ok_or(StorageError::NotFound)?;
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM segments WHERE id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM workdays
+              WHERE id = ?1
+                AND coalesce(note, '') = ''
+                AND NOT EXISTS (SELECT 1 FROM segments WHERE workday_id = ?1)",
+            params![segment.workday_id],
+        )?;
+        tx.commit()?;
+        Ok(segment)
+    }
+
+    /// What a "clean up" of this organisation would remove.
+    pub fn org_contents(&self, org_id: &str) -> Result<OrgContents> {
+        let conn = self.lock();
+        let bookings = conn.query_row(
+            "SELECT count(*) FROM segments s JOIN users u ON u.id = s.user_id WHERE u.org_id = ?1",
+            params![org_id],
+            |r| r.get(0),
+        )?;
+        let days = conn.query_row(
+            "SELECT count(*) FROM workdays w JOIN users u ON u.id = w.user_id WHERE u.org_id = ?1",
+            params![org_id],
+            |r| r.get(0),
+        )?;
+        let projects = conn.query_row(
+            "SELECT count(*) FROM projects WHERE org_id = ?1",
+            params![org_id],
+            |r| r.get(0),
+        )?;
+        let tasks = conn.query_row(
+            "SELECT count(*) FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.org_id = ?1",
+            params![org_id],
+            |r| r.get(0),
+        )?;
+        Ok(OrgContents {
+            bookings,
+            days,
+            projects,
+            tasks,
+        })
+    }
+
+    /// Remove every booking (and day) of the organisation's users.
+    pub fn purge_bookings(&self, org_id: &str) -> Result<OrgContents> {
+        let before = self.org_contents(org_id)?;
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM segments WHERE user_id IN (SELECT id FROM users WHERE org_id = ?1)",
+            params![org_id],
+        )?;
+        tx.execute(
+            "DELETE FROM workdays WHERE user_id IN (SELECT id FROM users WHERE org_id = ?1)",
+            params![org_id],
+        )?;
+        tx.commit()?;
+        Ok(before)
+    }
+
+    /// Remove every project with its tasks, comments and effort entries.
+    pub fn purge_tasks(&self, org_id: &str) -> Result<OrgContents> {
+        let before = self.org_contents(org_id)?;
+        self.lock()
+            .execute("DELETE FROM projects WHERE org_id = ?1", params![org_id])?;
+        Ok(before)
     }
 
     // ---- users ---------------------------------------------------------
@@ -3755,5 +3840,91 @@ mod tests {
             store.delete_account(&brk.id),
             Err(StorageError::Conflict(_))
         ));
+    }
+
+    #[test]
+    fn deleting_a_booking_prunes_the_emptied_day() {
+        let (store, org, user) = store();
+        let accounts = store.accounts(&org.id, false).unwrap();
+        let work = accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Work)
+            .unwrap();
+
+        let hour = 3_600_000;
+        let day = 86_400_000;
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: work.id.clone(),
+                },
+                NOW,
+                "2026-10-20",
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(&user, &Action::Stop, NOW + hour, "2026-10-20", "test")
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Start {
+                    account_id: work.id.clone(),
+                },
+                NOW + day,
+                "2026-10-21",
+                "test",
+            )
+            .unwrap();
+        store
+            .punch(
+                &user,
+                &Action::Stop,
+                NOW + day + hour,
+                "2026-10-21",
+                "test",
+            )
+            .unwrap();
+        store
+            .lock()
+            .execute(
+                "UPDATE workdays SET note = 'Notiz' WHERE date = '2026-10-21'",
+                [],
+            )
+            .unwrap();
+
+        let first: String = store
+            .lock()
+            .query_row(
+                "SELECT s.id FROM segments s JOIN workdays w ON w.id = s.workday_id
+                  WHERE w.date = '2026-10-20'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        store.delete_segment(&first).unwrap();
+
+        let days_on = |date: &str| -> i64 {
+            store
+                .lock()
+                .query_row(
+                    "SELECT count(*) FROM workdays WHERE date = ?1",
+                    params![date],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(days_on("2026-10-20"), 0, "emptied day went with the booking");
+        assert_eq!(days_on("2026-10-21"), 1, "a day with a note survives");
+
+        let before = store.org_contents(&org.id).unwrap();
+        assert_eq!(before.bookings, 1);
+        assert_eq!(before.days, 1);
+        let purged = store.purge_bookings(&org.id).unwrap();
+        assert_eq!(purged.bookings, before.bookings);
+        assert_eq!(store.org_contents(&org.id).unwrap().bookings, 0);
+        assert_eq!(days_on("2026-10-21"), 0);
     }
 }

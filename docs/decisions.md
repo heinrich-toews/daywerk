@@ -192,3 +192,20 @@ the intended shape.
 
 The logo travels inside the JSON backup as base64, so a restore keeps the
 branding. Older backups without the `org_logos` key still import.
+
+## Deleting bookings and cleaning up
+
+A booking can be deleted from *Verlauf*. The rules mirror editing: admins may
+delete any booking, office any booking of their organisation, employees only
+their own. Deleting a booking also removes the day when nothing else is left on
+it — unless the day carries a note. Every deletion is audited with user,
+account, date and time range.
+
+Admins additionally have a **Gefahrenzone** in Verwaltung that purges one
+organisation: all bookings (with their days) or all projects and tasks. Both
+require typing `LÖSCHEN` and are written to the audit log; the counts behind the
+warning come from `GET /api/orgs/{id}/contents`, so the dialog states what will
+disappear. Purging never touches users, accounts or contracts.
+
+Tasks already followed the same idea: creator, assignee, office and admin may
+delete a task; everyone else may not.

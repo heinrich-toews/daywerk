@@ -679,6 +679,114 @@ def main() -> int:
     status, _, _ = fetch_raw(f"/api/orgs/{org_id}/logo", None)
     check(status == 404, f"removed logo returns 404 ({status})")
 
+    # ---- deleting bookings ---------------------------------------------
+    status, office_login = call(
+        "/api/auth/login", method="POST",
+        body={"email": "office@test.local", "password": "test1234"},
+    )
+    office_token = office_login["token"]
+
+    def segments_of(token):
+        _, days = call("/api/days", token)
+        return [seg for entry in days for seg in entry["segments"]]
+
+    status, del_account = call(
+        "/api/accounts", admin_token, "POST", {"name": "Lösch-Test", "kind": "work"}
+    )
+    check(status == 200, f"create an account for deletion tests ({status})")
+
+    call(
+        "/api/punch", again["token"], "POST",
+        {"action": "start", "account_id": del_account["id"]},
+    )
+    call("/api/punch", again["token"], "POST", {"action": "stop"})
+    own = next(
+        seg for seg in segments_of(again["token"])
+        if seg["account_id"] == del_account["id"]
+    )
+    status, _ = call(f"/api/segments/{own['id']}", office_token, "DELETE")
+    check(status == 204, f"office deletes a booking of its organisation ({status})")
+
+    call(
+        "/api/punch", again["token"], "POST",
+        {"action": "start", "account_id": del_account["id"]},
+    )
+    call("/api/punch", again["token"], "POST", {"action": "stop"})
+    own = next(
+        seg for seg in segments_of(again["token"])
+        if seg["account_id"] == del_account["id"]
+    )
+
+    admin_work = next(
+        a for a in call("/api/me", admin_token)[1]["accounts"] if a["kind"] == "work"
+    )
+    call(
+        "/api/punch", admin_token, "POST",
+        {"action": "start", "account_id": admin_work["id"]},
+    )
+    call("/api/punch", admin_token, "POST", {"action": "stop"})
+    foreign = next(
+        seg for seg in segments_of(admin_token)
+        if seg["account_id"] == admin_work["id"]
+    )
+    status, _ = call(f"/api/segments/{foreign['id']}", again["token"], "DELETE")
+    check(status == 403, f"employees cannot delete foreign bookings ({status})")
+
+    status, _ = call(f"/api/segments/{own['id']}", again["token"], "DELETE")
+    check(status == 204, f"employees delete their own booking ({status})")
+    check(
+        all(seg["id"] != own["id"] for seg in segments_of(again["token"])),
+        "the deleted booking is gone",
+    )
+
+    # ---- cleaning up an organisation -----------------------------------
+    status, contents = call(f"/api/orgs/{org_id}/contents", admin_token)
+    check(
+        status == 200 and contents["bookings"] > 0 and contents["days"] > 0,
+        f"admins see what a cleanup would remove ({status})",
+    )
+    status, _ = call(f"/api/orgs/{org_id}/contents", again["token"])
+    check(status == 403, f"employees cannot read cleanup counts ({status})")
+    status, _ = call(
+        f"/api/orgs/{org_id}/purge", office_token, "POST", {"what": "bookings"}
+    )
+    check(status == 403, f"office cannot purge bookings ({status})")
+
+    status, purged = call(
+        f"/api/orgs/{org_id}/purge", admin_token, "POST", {"what": "bookings"}
+    )
+    check(
+        status == 200 and purged["bookings"] == contents["bookings"],
+        f"admin purges all bookings ({status})",
+    )
+    status, days = call("/api/days", again["token"])
+    check(days == [], "no bookings are left after the purge")
+    status, _ = call(
+        f"/api/orgs/{org_id}/purge", admin_token, "POST", {"what": "nonsense"}
+    )
+    check(status == 400, f"unknown cleanup target rejected ({status})")
+
+    status, doomed_project = call(
+        "/api/projects", office_token, "POST", {"name": "Aufräum-Test"}
+    )
+    check(status == 200, f"create a project to purge ({status})")
+    call(
+        "/api/tasks", again["token"], "POST",
+        {"project_id": doomed_project["id"], "title": "Weg damit"},
+    )
+    status, purged = call(
+        f"/api/orgs/{org_id}/purge", admin_token, "POST", {"what": "tasks"}
+    )
+    check(
+        status == 200 and purged["tasks"] >= 1 and purged["projects"] >= 1,
+        f"admin purges all tasks ({status})",
+    )
+    status, projects = call("/api/projects", admin_token)
+    check(
+        all(p["id"] != doomed_project["id"] for p in projects),
+        "the purged project and its tasks are gone",
+    )
+
     print("\n".join(results))
     return 0 if all(line.startswith("PASS") for line in results) else 1
 

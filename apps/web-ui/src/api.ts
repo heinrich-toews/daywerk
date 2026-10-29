@@ -35,6 +35,14 @@ export interface Org {
   default_workdays_per_week: number;
 }
 
+/** Counts behind the admin "clean up" panel. */
+export interface OrgContents {
+  bookings: number;
+  days: number;
+  projects: number;
+  tasks: number;
+}
+
 /** What a time account still holds, for the delete warning. */
 export interface AccountUsage {
   entries: number;
@@ -571,6 +579,16 @@ export const api = {
   accounts: (orgId?: string) => request<Account[]>(`/api/accounts${qs({ org_id: orgId })}`),
 
   accountUsage: (id: string) => request<AccountUsage>(`/api/accounts/${id}/usage`),
+
+  deleteSegment: (id: string) => request<void>(`/api/segments/${id}`, { method: "DELETE" }),
+
+  orgContents: (id: string) => request<OrgContents>(`/api/orgs/${id}/contents`),
+
+  purgeOrg: (id: string, what: "bookings" | "tasks") =>
+    request<OrgContents>(`/api/orgs/${id}/purge`, {
+      method: "POST",
+      body: JSON.stringify({ what }),
+    }),
 
   deleteAccount: (id: string) =>
     request<AccountDeletion>(`/api/accounts/${id}`, { method: "DELETE" }),
