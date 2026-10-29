@@ -73,23 +73,40 @@ function tick() {
   }
 }
 
-async function impact(style: "light" | "medium") {
+let warned = false;
+
+async function impact(style: "medium" | "heavy") {
   if (isTauri) {
     try {
-      const { impactFeedback } = await import("@tauri-apps/plugin-haptics");
-      await impactFeedback(style);
+      const haptics = await import("@tauri-apps/plugin-haptics");
+      await haptics.impactFeedback(style);
       return;
-    } catch {
-      /* fall through to the web API */
+    } catch (err) {
+      if (!warned) {
+        warned = true;
+        console.warn("haptics: impact failed, trying vibrate", err);
+      }
+      try {
+        const haptics = await import("@tauri-apps/plugin-haptics");
+        await haptics.vibrate(style === "heavy" ? 30 : 20);
+        return;
+      } catch (err2) {
+        if (!warned) console.warn("haptics: vibrate failed", err2);
+      }
     }
   }
   if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-    navigator.vibrate(style === "medium" ? 20 : 10);
+    navigator.vibrate(style === "heavy" ? 30 : 20);
   }
 }
 
-/** Fire feedback for a punch action. Never throws, never blocks the request. */
-export function tap(style: "light" | "medium" = "light") {
+/**
+ * Fire feedback for a punch action. Never throws, never blocks the request.
+ *
+ * The plugin's "light" impact is only ~12 % amplitude, which is easy to miss
+ * through a phone case, so the punch buttons use medium/heavy.
+ */
+export function tap(style: "medium" | "heavy" = "medium") {
   if (vibrate()) void impact(style);
   tick();
 }

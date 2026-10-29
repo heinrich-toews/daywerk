@@ -149,7 +149,7 @@ export default function Today() {
    */
   function request(action: "start" | "pause" | "stop", accountId?: string) {
     // Answer the tap immediately, before the server round trip.
-    void tap(action === "stop" ? "medium" : "light");
+    void tap(action === "stop" ? "heavy" : "medium");
     const a = active();
     if (a && a.kind === "work") {
       setPending({
