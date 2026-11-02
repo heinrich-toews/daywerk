@@ -185,6 +185,24 @@ adb install apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/r
 **Distribution:** side-load the universal APK for now; build the AAB only if the
 app is published to Google Play.
 
+## Release export
+
+Every release is copied to the shared Nextcloud folder together with notes,
+newest release at the top of `RELEASE-NOTES.md`:
+
+```sh
+VITE_SERVER_URL=https://time.hgs-t.de \
+DAYWERK_KEYSTORE_PROPERTIES=$HOME/.config/daywerk/keystore.properties \
+pnpm android:build --apk --aab --target aarch64 x86_64
+
+scripts/release_export.py --notes /tmp/notes-<version>.md
+```
+
+The script names the artifacts `Daywerk-<version>-<date>.apk` / `.aab`, records
+size and SHA-256 in the notes and prepends the section. `--out`, `--date` and
+`--server` override the defaults; without `--notes` it inserts a placeholder so
+the release is never exported without a notes entry.
+
 ## Notes / gotchas
 
 - **Always use `-gpu host` on this host.** The bundled SwiftShader renderer

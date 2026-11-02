@@ -16,6 +16,7 @@
     "android:dev": "scripts/android.sh dev",
     "android:build": "scripts/android.sh build",
     "android:build:debug": "scripts/android.sh build --debug --apk",
-    "android:emulator": "scripts/emulator.sh"
+    "android:emulator": "scripts/emulator.sh",
+    "release:export": "python3 scripts/release_export.py"
   }
 }
