@@ -17,6 +17,8 @@
     "android:build": "scripts/android.sh build",
     "android:build:debug": "scripts/android.sh build --debug --apk",
     "android:emulator": "scripts/emulator.sh",
-    "release:export": "python3 scripts/release_export.py"
+    "release:export": "python3 scripts/release_export.py",
+    "mcp": "cargo run -p dw-mcp --",
+    "test:mcp": "python3 scripts/mcp-smoke.py"
   }
 }

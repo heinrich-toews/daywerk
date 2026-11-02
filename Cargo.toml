@@ -5,6 +5,7 @@ members = [
     "crates/dw-storage",
     "crates/dw-server",
     "crates/dw-export",
+    "crates/dw-mcp",
     "apps/desktop/src-tauri",
 ]
 

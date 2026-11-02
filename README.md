@@ -143,6 +143,21 @@ balance = Σ work segments − (target_minutes × days with entries) + adjustmen
   off does not silently create a negative balance.
 - `balance_adjustments` lets the office carry over a previous balance or correct one.
 
+## MCP server
+
+`dw-mcp` exposes the app to AI assistants (opencode, Claude Desktop) over the
+Model Context Protocol. It is a thin client of the HTTP API and acts as the
+user whose token it was given, so roles and tenant isolation stay enforced by
+the server.
+
+```sh
+cargo build --release -p dw-mcp
+./target/release/dw-mcp --server https://time.hgs-t.de --token <token>
+```
+
+Setup, the opencode configuration and the full tool list:
+[docs/mcp.md](docs/mcp.md).
+
 ## API
 
 All endpoints return JSON and take `Authorization: Bearer <token>` except login.

@@ -36,6 +36,7 @@ BUILD = REPO / "apps/desktop/src-tauri/gen/android/app/build/outputs"
 APK = BUILD / "apk/universal/release/app-universal-release.apk"
 AAB = BUILD / "bundle/universalRelease/app-universal-release.aab"
 DIST = REPO / "apps/web-ui/dist"
+MCP = REPO / "target/release/dw-mcp"
 
 DEFAULT_OUT = pathlib.Path(
     "/home/twx/NextcloudTWx/03__Projekte/10__HGS/02__Buchungs_App/Releases"
@@ -106,6 +107,14 @@ def main() -> int:
         name = f"Daywerk-{version}-{date.isoformat()}.{suffix}"
         target = args.out / name
         shutil.copy2(source, target)
+        rows.append(f"| `{name}` | {human_size(target)} | `{sha256(target)}` |")
+
+    # The MCP server runs on the workstation, not in the container.
+    if MCP.exists():
+        name = f"Daywerk-{version}-{date.isoformat()}-mcp-linux-x86_64"
+        target = args.out / name
+        shutil.copy2(MCP, target)
+        target.chmod(0o755)
         rows.append(f"| `{name}` | {human_size(target)} | `{sha256(target)}` |")
 
     # The web build is the PWA; keep a copy so a release can be re-hosted.
