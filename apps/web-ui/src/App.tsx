@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, onMount } from "solid-js";
+import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 import {
   boot,
@@ -208,6 +208,17 @@ function Shell() {
   const org = () => me()?.org;
   const inGlobal = () => globalView() !== null;
 
+  const [online, setOnline] = createSignal(navigator.onLine);
+  onMount(() => {
+    const sync = () => setOnline(navigator.onLine);
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", sync);
+    onCleanup(() => {
+      window.removeEventListener("online", sync);
+      window.removeEventListener("offline", sync);
+    });
+  });
+
   return (
     <div class="flex h-dvh flex-col overflow-hidden">
       <header class="sticky top-0 z-30 border-b border-line bg-card/95 backdrop-blur">
@@ -275,6 +286,12 @@ function Shell() {
           </div>
         </Show>
       </header>
+
+      <Show when={!online()}>
+        <div class="bg-danger/10 px-4 py-2 text-center text-xs font-semibold text-danger">
+          {t("app.offline")}
+        </div>
+      </Show>
 
       <main
         class={`mx-auto w-full max-w-4xl flex-1 overflow-y-auto px-4 pt-4 ${

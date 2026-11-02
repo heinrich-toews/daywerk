@@ -4,6 +4,7 @@ export type Lang = "de" | "en";
 export const LANGS: Lang[] = ["de", "en"];
 
 const de = {
+  "app.offline": "Offline – Änderungen können nicht gespeichert werden.",
   "app.tagline": "Zeiten stempeln, klar und einfach.",
   "tasks.newProject": "Neues Projekt",
   "tasks.projects": "Projekte",
@@ -261,6 +262,7 @@ const de = {
 type Key = keyof typeof de;
 
 const en: Record<Key, string> = {
+  "app.offline": "Offline — changes cannot be saved.",
   "app.tagline": "Punch in, clear and simple.",
   "tasks.newProject": "New project",
   "tasks.projects": "Projects",

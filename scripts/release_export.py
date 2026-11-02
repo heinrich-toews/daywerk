@@ -35,6 +35,7 @@ TAURI_CONF = REPO / "apps/desktop/src-tauri/tauri.conf.json"
 BUILD = REPO / "apps/desktop/src-tauri/gen/android/app/build/outputs"
 APK = BUILD / "apk/universal/release/app-universal-release.apk"
 AAB = BUILD / "bundle/universalRelease/app-universal-release.aab"
+DIST = REPO / "apps/web-ui/dist"
 
 DEFAULT_OUT = pathlib.Path(
     "/home/twx/NextcloudTWx/03__Projekte/10__HGS/02__Buchungs_App/Releases"
@@ -106,6 +107,13 @@ def main() -> int:
         target = args.out / name
         shutil.copy2(source, target)
         rows.append(f"| `{name}` | {human_size(target)} | `{sha256(target)}` |")
+
+    # The web build is the PWA; keep a copy so a release can be re-hosted.
+    if DIST.is_dir():
+        name = f"Daywerk-{version}-{date.isoformat()}-pwa"
+        archive = shutil.make_archive(str(args.out / name), "zip", DIST)
+        target = pathlib.Path(archive)
+        rows.append(f"| `{target.name}` | {human_size(target)} | `{sha256(target)}` |")
 
     section = "\n".join(
         [
